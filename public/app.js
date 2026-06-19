@@ -7,16 +7,38 @@ const KLINE_INTERVAL_LABELS = {
   "1mo": "月线"
 };
 
-const STRATEGY_LABELS = {
+const PRODUCT_CONFIGS = {
+  al: {
+    label: "沪铝",
+    mark: "AL",
+    title: "沪铝期货行情",
+    subtitle: "SHFE Aluminum Futures",
+    description: "沪铝、螺纹钢期货行情，可安装到手机和电脑的 PWA 应用。",
+    defaultSymbol: "nf_AL0",
+    strategyPrefix: "铝",
+    spec: "交易品种：铝；交易单位：5 吨/手；报价单位：元/吨；最小变动价位：5 元/吨。"
+  },
+  rb: {
+    label: "螺纹钢",
+    mark: "RB",
+    title: "螺纹钢期货行情",
+    subtitle: "SHFE Rebar Futures",
+    description: "沪铝、螺纹钢期货行情，可安装到手机和电脑的 PWA 应用。",
+    defaultSymbol: "nf_RB0",
+    strategyPrefix: "螺纹钢",
+    spec: "交易品种：螺纹钢；交易单位：10 吨/手；报价单位：元/吨；最小变动价位：1 元/吨。"
+  }
+};
+
+const STRATEGY_SUFFIXES = {
   none: "空",
-  al_update_1: "铝更新1",
-  al_best_1: "铝-1Best",
-  al_volume_price: "铝：量价"
+  al_update_1: "更新1",
+  al_best_1: "-1Best",
+  al_volume_price: "：量价"
 };
 
 const STRATEGY_CONFIGS = {
   al_update_1: {
-    label: STRATEGY_LABELS.al_update_1,
     period: 24,
     deviationPeriod: 24,
     deviationMultiple: 1.8,
@@ -25,7 +47,6 @@ const STRATEGY_CONFIGS = {
     lines: ["mid", "low"]
   },
   al_best_1: {
-    label: STRATEGY_LABELS.al_best_1,
     period: 24,
     deviationPeriod: 24,
     deviationMultiple: 1.3,
@@ -34,7 +55,6 @@ const STRATEGY_CONFIGS = {
     lines: ["up", "mid"]
   },
   al_volume_price: {
-    label: STRATEGY_LABELS.al_volume_price,
     period: 24,
     deviationPeriod: 24,
     deviationMultiple: 1.3,
@@ -47,15 +67,34 @@ const STRATEGY_CONFIGS = {
 
 const savedStrategy = localStorage.getItem("strategy") || "none";
 const savedTheme = localStorage.getItem("klineTheme") || "light";
+const savedProduct = PRODUCT_CONFIGS[localStorage.getItem("product")] ? localStorage.getItem("product") : "al";
+
+function productConfig(productKey = savedProduct) {
+  return PRODUCT_CONFIGS[productKey] || PRODUCT_CONFIGS.al;
+}
+
+function selectedSymbolStorageKey(productKey) {
+  return `selectedSymbol:${productKey}`;
+}
+
+function strategyLabel(strategyKey, productKey = savedProduct) {
+  if (strategyKey === "none") return STRATEGY_SUFFIXES.none;
+  const suffix = STRATEGY_SUFFIXES[strategyKey] || "";
+  return `${productConfig(productKey).strategyPrefix}${suffix}`;
+}
 
 const state = {
   payload: null,
-  selectedSymbol: localStorage.getItem("selectedSymbol") || "nf_AL0",
+  product: savedProduct,
+  selectedSymbol:
+    localStorage.getItem(selectedSymbolStorageKey(savedProduct)) ||
+    (savedProduct === "al" ? localStorage.getItem("selectedSymbol") : "") ||
+    productConfig(savedProduct).defaultSymbol,
   refreshMs: Number(localStorage.getItem("refreshMs") || 15000),
   klineLimit: Number(localStorage.getItem("klineLimit") || 120),
   klineInterval: localStorage.getItem("klineInterval") || "1d",
   maPeriod: Number(localStorage.getItem("maPeriod") || 5),
-  strategy: STRATEGY_LABELS[savedStrategy] ? savedStrategy : "none",
+  strategy: STRATEGY_SUFFIXES[savedStrategy] ? savedStrategy : "none",
   klineTheme: savedTheme === "dark" ? "dark" : "light",
   klinePayload: null,
   klineCacheMode: false,
@@ -67,8 +106,12 @@ const state = {
 };
 
 const els = {
+  brandMark: document.querySelector("#brandMark"),
+  brandTitle: document.querySelector("#brandTitle"),
+  brandSubtitle: document.querySelector("#brandSubtitle"),
   installButton: document.querySelector("#installButton"),
   refreshButton: document.querySelector("#refreshButton"),
+  productSelect: document.querySelector("#productSelect"),
   refreshInterval: document.querySelector("#refreshInterval"),
   contractBadge: document.querySelector("#contractBadge"),
   marketState: document.querySelector("#marketState"),
@@ -97,6 +140,7 @@ const els = {
   strategySelect: document.querySelector("#strategySelect"),
   klineChart: document.querySelector("#klineChart"),
   klineMeta: document.querySelector("#klineMeta"),
+  productSpecText: document.querySelector("#productSpecText"),
   toast: document.querySelector("#toast")
 };
 
@@ -186,6 +230,33 @@ function intervalLabel(interval = state.klineInterval) {
   return KLINE_INTERVAL_LABELS[interval] || interval;
 }
 
+function quoteCacheKey(productKey = state.product) {
+  return `lastQuotePayload:${productKey}`;
+}
+
+function klineCacheKey(symbol, interval, limit, productKey = state.product) {
+  return `lastKlinePayload:${productKey}:${symbol}:${interval}:${limit}`;
+}
+
+function updateStrategyOptions() {
+  els.strategySelect.querySelectorAll("option").forEach((option) => {
+    option.textContent = strategyLabel(option.value, state.product);
+  });
+}
+
+function updateProductUi() {
+  const product = productConfig(state.product);
+  document.title = product.title;
+  document.querySelector("meta[name='description']")?.setAttribute("content", product.description);
+  els.productSelect.value = state.product;
+  els.strategySelect.value = state.strategy;
+  els.brandMark.textContent = product.mark;
+  els.brandTitle.textContent = product.title;
+  els.brandSubtitle.textContent = product.subtitle;
+  els.productSpecText.textContent = product.spec;
+  updateStrategyOptions();
+}
+
 function renderPrimary(quote) {
   if (!quote) return;
   const cls = trendClass(quote.change);
@@ -243,7 +314,8 @@ function renderTable(quotes) {
   els.contractsBody.querySelectorAll("tr[data-symbol]").forEach((row) => {
     row.addEventListener("click", () => {
       state.selectedSymbol = row.dataset.symbol;
-      localStorage.setItem("selectedSymbol", state.selectedSymbol);
+      localStorage.setItem(selectedSymbolStorageKey(state.product), state.selectedSymbol);
+      if (state.product === "al") localStorage.setItem("selectedSymbol", state.selectedSymbol);
       state.klineSymbol = null;
       render(state.payload);
     });
@@ -253,12 +325,15 @@ function renderTable(quotes) {
 function render(payload, cacheMode = false) {
   state.payload = payload;
   state.cacheMode = cacheMode;
+  state.product = payload?.productKey || state.product;
+  updateProductUi();
 
   const quotes = payload?.quotes || [];
   const primary = findPrimaryQuote(quotes);
   if (primary && state.selectedSymbol !== primary.symbol && !quotes.some((q) => q.symbol === state.selectedSymbol)) {
     state.selectedSymbol = primary.symbol;
-    localStorage.setItem("selectedSymbol", state.selectedSymbol);
+    localStorage.setItem(selectedSymbolStorageKey(state.product), state.selectedSymbol);
+    if (state.product === "al") localStorage.setItem("selectedSymbol", state.selectedSymbol);
   }
 
   renderPrimary(primary);
@@ -291,19 +366,26 @@ function scheduleNext() {
 
 async function fetchQuotes() {
   setText("dataStatus", "刷新中");
+  const productAtRequest = state.product;
+  const cacheKey = quoteCacheKey(productAtRequest);
 
   try {
-    const response = await fetch(`/api/quote?t=${Date.now()}`, { cache: "no-store" });
+    const response = await fetch(
+      `/api/quote?product=${encodeURIComponent(productAtRequest)}&t=${Date.now()}`,
+      { cache: "no-store" }
+    );
     if (!response.ok) {
       const errorPayload = await response.json().catch(() => ({}));
       throw new Error(errorPayload.detail || errorPayload.error || `HTTP ${response.status}`);
     }
     const payload = await response.json();
     if (!payload.quotes?.length) throw new Error("没有返回可用行情");
-    localStorage.setItem("lastQuotePayload", JSON.stringify(payload));
+    if (productAtRequest !== state.product) return;
+    localStorage.setItem(cacheKey, JSON.stringify(payload));
     render(payload, false);
   } catch (error) {
-    const cached = localStorage.getItem("lastQuotePayload");
+    if (productAtRequest !== state.product) return;
+    const cached = localStorage.getItem(cacheKey);
     if (cached) {
       render(JSON.parse(cached), true);
       showToast(`行情源暂时不可用，已显示最近缓存：${error.message}`);
@@ -319,6 +401,7 @@ async function fetchQuotes() {
 async function fetchKline(symbol = state.selectedSymbol) {
   const quote = findSelectedQuote();
   const interval = state.klineInterval;
+  const productAtRequest = state.product;
   const label = intervalLabel(interval);
   state.klineSymbol = symbol;
   state.klineIntervalLoaded = interval;
@@ -329,11 +412,11 @@ async function fetchKline(symbol = state.selectedSymbol) {
   els.klineChart.textContent = "正在加载 K 线...";
   els.klineMeta.innerHTML = "";
 
-  const cacheKey = `lastKlinePayload:${symbol}:${interval}:${state.klineLimit}`;
+  const cacheKey = klineCacheKey(symbol, interval, state.klineLimit, productAtRequest);
 
   try {
     const response = await fetch(
-      `/api/kline?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(
+      `/api/kline?product=${encodeURIComponent(productAtRequest)}&symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(
         interval
       )}&limit=${state.klineLimit}&t=${Date.now()}`,
       { cache: "no-store" }
@@ -344,9 +427,23 @@ async function fetchKline(symbol = state.selectedSymbol) {
     }
     const payload = await response.json();
     if (!payload.candles?.length) throw new Error("没有返回可用K线");
+    if (
+      productAtRequest !== state.product ||
+      interval !== state.klineInterval ||
+      symbol !== state.selectedSymbol
+    ) {
+      return;
+    }
     localStorage.setItem(cacheKey, JSON.stringify(payload));
     renderKline(payload, false);
   } catch (error) {
+    if (
+      productAtRequest !== state.product ||
+      interval !== state.klineInterval ||
+      symbol !== state.selectedSymbol
+    ) {
+      return;
+    }
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
       renderKline(JSON.parse(cached), true);
@@ -532,7 +629,7 @@ function computeStrategy(candles, strategyKey) {
 
   return {
     key: strategyKey,
-    label: config.label,
+    label: strategyLabel(strategyKey, state.product),
     lines,
     signals
   };
@@ -592,6 +689,34 @@ function shortDateLabel(date, interval) {
   }
   if (interval === "1mo") return date.slice(0, 7);
   return date.slice(5);
+}
+
+function isIntradayInterval(interval) {
+  return interval === "1h" || interval === "3h" || interval === "5h";
+}
+
+function dateLabelParts(date, interval) {
+  if (date.includes(" ")) {
+    const [day, time] = date.split(" ");
+    return isIntradayInterval(interval) ? [day.slice(5), time.slice(0, 5)] : [shortDateLabel(date, interval)];
+  }
+
+  if (interval === "1mo") return [date.slice(0, 7)];
+  return [date.slice(5)];
+}
+
+function dateLabelIndexes(candles, interval) {
+  if (candles.length <= 1) return [0];
+
+  const maxLabels = isIntradayInterval(interval) ? 8 : 6;
+  const count = Math.min(maxLabels, candles.length);
+  const indexes = new Set();
+
+  for (let index = 0; index < count; index += 1) {
+    indexes.add(Math.round((index * (candles.length - 1)) / (count - 1)));
+  }
+
+  return Array.from(indexes).sort((a, b) => a - b);
 }
 
 function linePath(values, xFor, yFor) {
@@ -678,7 +803,7 @@ function buildKlineSvg(candles, maValues, maPeriod, interval, strategy) {
   if (!candles.length) return "";
 
   const width = 980;
-  const height = 450;
+  const height = 468;
   const margin = { top: 24, right: 64, bottom: 44, left: 70 };
   const priceTop = margin.top;
   const priceHeight = 286;
@@ -780,11 +905,20 @@ function buildKlineSvg(candles, maValues, maPeriod, interval, strategy) {
         .join("")
     : "";
 
-  const labelIndexes = [0, Math.floor((candles.length - 1) / 2), candles.length - 1];
-  const dateLabels = Array.from(new Set(labelIndexes))
+  const labelIndexes = dateLabelIndexes(candles, interval);
+  const dateLabels = labelIndexes
     .map((index) => {
       const x = xFor(index);
-      return `<text x="${x}" y="${height - 14}" class="date-label">${escapeHtml(shortDateLabel(candles[index].date, interval))}</text>`;
+      const parts = dateLabelParts(candles[index].date, interval);
+      if (parts.length === 2) {
+        return `
+          <text x="${x}" y="${height - 28}" class="date-label">
+            <tspan x="${x}">${escapeHtml(parts[0])}</tspan>
+            <tspan x="${x}" dy="15">${escapeHtml(parts[1])}</tspan>
+          </text>
+        `;
+      }
+      return `<text x="${x}" y="${height - 16}" class="date-label">${escapeHtml(parts[0])}</text>`;
     })
     .join("");
 
@@ -872,6 +1006,21 @@ els.refreshInterval.addEventListener("change", () => {
   scheduleNext();
 });
 
+els.productSelect.value = state.product;
+els.productSelect.addEventListener("change", () => {
+  state.product = PRODUCT_CONFIGS[els.productSelect.value] ? els.productSelect.value : "al";
+  localStorage.setItem("product", state.product);
+  state.selectedSymbol =
+    localStorage.getItem(selectedSymbolStorageKey(state.product)) ||
+    productConfig(state.product).defaultSymbol;
+  state.klineSymbol = null;
+  state.klineIntervalLoaded = null;
+  state.klinePayload = null;
+  updateProductUi();
+  window.clearTimeout(state.timer);
+  fetchQuotes();
+});
+
 els.klineInterval.value = state.klineInterval;
 els.klineInterval.addEventListener("change", () => {
   state.klineInterval = els.klineInterval.value;
@@ -906,6 +1055,7 @@ els.klineTheme.addEventListener("change", () => {
 });
 
 els.strategySelect.value = state.strategy;
+updateProductUi();
 els.strategySelect.addEventListener("change", () => {
   state.strategy = els.strategySelect.value;
   localStorage.setItem("strategy", state.strategy);

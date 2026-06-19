@@ -12,6 +12,40 @@ const SINA_KLINE_ENDPOINT =
   "https://stock2.finance.sina.com.cn/futures/api/jsonp.php";
 const SINA_REFERER = "https://finance.sina.com.cn/";
 
+const DEFAULT_PRODUCT = "al";
+const PRODUCT_CONFIGS = {
+  al: {
+    key: "al",
+    code: "AL",
+    label: "沪铝",
+    product: "沪铝期货",
+    defaultSymbol: "nf_AL0",
+    contractUnit: "5吨/手",
+    priceUnit: "元/吨",
+    sourceUrl: "https://gu.sina.cn/ft/hq/nf.php?symbol=AL0"
+  },
+  rb: {
+    key: "rb",
+    code: "RB",
+    label: "螺纹钢",
+    product: "螺纹钢期货",
+    defaultSymbol: "nf_RB0",
+    contractUnit: "10吨/手",
+    priceUnit: "元/吨",
+    sourceUrl: "https://gu.sina.cn/ft/hq/nf.php?symbol=RB0"
+  }
+};
+
+const PRODUCT_ALIASES = {
+  aluminum: "al",
+  alu: "al",
+  "沪铝": "al",
+  "铝": "al",
+  rebar: "rb",
+  "螺纹": "rb",
+  "螺纹钢": "rb"
+};
+
 const KLINE_INTERVALS = {
   "1h": { label: "1小时", source: "minute", type: 60, limit: 120 },
   "3h": { label: "3小时", source: "minute", type: 180, limit: 120 },
@@ -49,12 +83,40 @@ function pad2(value) {
   return String(value).padStart(2, "0");
 }
 
-function buildDefaultSymbols(now = new Date()) {
-  const symbols = ["nf_AL0"];
+function normalizeProduct(product, fallback = DEFAULT_PRODUCT) {
+  const clean = String(product || "").trim();
+  const lower = clean.toLowerCase();
+  if (PRODUCT_CONFIGS[lower]) return lower;
+  if (PRODUCT_ALIASES[lower]) return PRODUCT_ALIASES[lower];
+
+  const upper = clean.toUpperCase();
+  const matched = Object.values(PRODUCT_CONFIGS).find((item) => item.code === upper);
+  return matched?.key || fallback;
+}
+
+function productKeyForCode(code) {
+  const clean = String(code || "").toUpperCase();
+  const matched = Object.values(PRODUCT_CONFIGS).find((item) => item.code === clean);
+  return matched?.key || "";
+}
+
+function productKeyFromSymbol(symbol) {
+  const clean = String(symbol || "").trim().toUpperCase().replace(/^NF_/, "");
+  const prefix = clean.match(/^([A-Z]+)/)?.[1] || "";
+  return productKeyForCode(prefix);
+}
+
+function productConfig(productKey) {
+  return PRODUCT_CONFIGS[productKey] || PRODUCT_CONFIGS[DEFAULT_PRODUCT];
+}
+
+function buildDefaultSymbols(productKey = DEFAULT_PRODUCT, now = new Date()) {
+  const product = productConfig(productKey);
+  const symbols = [product.defaultSymbol];
   let year = now.getFullYear();
   let month = now.getMonth() + 1;
 
-  // SHFE aluminum contracts are monthly. After the 15th, the nearby
+  // SHFE futures contracts are monthly. After the 15th, the nearby
   // delivery month is usually expired, so start from the next month.
   if (now.getDate() > 15) {
     month += 1;
@@ -64,19 +126,22 @@ function buildDefaultSymbols(now = new Date()) {
     const contractYear = year + Math.floor((month - 1) / 12);
     const contractMonth = ((month - 1) % 12) + 1;
     const yy = String(contractYear).slice(-2);
-    symbols.push(`nf_AL${yy}${pad2(contractMonth)}`);
+    symbols.push(`nf_${product.code}${yy}${pad2(contractMonth)}`);
     month += 1;
   }
 
   return symbols;
 }
 
-function normalizeSymbol(symbol) {
+function normalizeSymbol(symbol, productKey = "") {
   if (!symbol) return "";
   const clean = symbol.trim().toUpperCase();
-  if (/^NF_AL(?:0|\d{4})$/.test(clean)) return clean.replace(/^NF_/, "nf_");
-  if (/^AL(?:0|\d{4})$/.test(clean)) return `nf_${clean}`;
-  return "";
+  const match = clean.match(/^NF_([A-Z]+)(0|\d{4})$/) || clean.match(/^([A-Z]+)(0|\d{4})$/);
+  if (!match) return "";
+
+  const inferredProduct = productKeyForCode(match[1]);
+  if (!inferredProduct || (productKey && inferredProduct !== productKey)) return "";
+  return `nf_${match[1]}${match[2]}`;
 }
 
 function normalizeInterval(interval) {
@@ -84,12 +149,12 @@ function normalizeInterval(interval) {
   return KLINE_INTERVALS[clean] ? clean : INTERVAL_ALIASES[clean] || "1d";
 }
 
-function cleanSymbols(input) {
+function cleanSymbols(input, productKey = DEFAULT_PRODUCT) {
   const requested = input
     ? input.split(",").map((item) => item.trim()).filter(Boolean)
-    : buildDefaultSymbols();
+    : buildDefaultSymbols(productKey);
 
-  return Array.from(new Set(requested.map(normalizeSymbol).filter(Boolean)));
+  return Array.from(new Set(requested.map((item) => normalizeSymbol(item, productKey)).filter(Boolean)));
 }
 
 function symbolToSinaCode(symbol) {
@@ -160,7 +225,7 @@ function parseSinaPayload(text) {
       date,
       time,
       timestamp: date && time ? `${date} ${time}` : "",
-      isContinuous: symbol.toUpperCase() === "NF_AL0",
+      isContinuous: /0$/i.test(symbol),
       isMain: fields[18] === "1",
       open: numberOrNull(fields[2]),
       high: numberOrNull(fields[3]),
@@ -282,7 +347,7 @@ async function fetchQuotes(symbols) {
 
 async function fetchDailyKline(symbol) {
   const code = symbolToSinaCode(symbol);
-  if (!code) throw new Error("Invalid aluminum futures symbol.");
+  if (!code) throw new Error("Invalid futures symbol.");
 
   const variableName = `_${code}_day`;
   const url = `${SINA_KLINE_ENDPOINT}/var%20${encodeURIComponent(
@@ -294,7 +359,7 @@ async function fetchDailyKline(symbol) {
 
 async function fetchMinuteKline(symbol, type) {
   const code = symbolToSinaCode(symbol);
-  if (!code) throw new Error("Invalid aluminum futures symbol.");
+  if (!code) throw new Error("Invalid futures symbol.");
 
   const variableName = `_${code}_${type}`;
   const url = `${SINA_KLINE_ENDPOINT}/var%20${encodeURIComponent(
@@ -346,21 +411,26 @@ function sendJson(res, statusCode, payload) {
 
 async function handleQuote(req, res, url) {
   try {
-    const symbols = cleanSymbols(url.searchParams.get("symbols"));
+    const productKey = normalizeProduct(url.searchParams.get("product"));
+    const product = productConfig(productKey);
+    const symbols = cleanSymbols(url.searchParams.get("symbols"), productKey);
     if (symbols.length === 0) {
-      sendJson(res, 400, { error: "No valid aluminum futures symbols requested." });
+      sendJson(res, 400, { error: "No valid futures symbols requested." });
       return;
     }
 
     const text = await fetchQuotes(symbols);
     const quotes = parseSinaPayload(text);
     sendJson(res, 200, {
-      product: "沪铝期货",
+      productKey,
+      product: product.product,
+      productLabel: product.label,
+      defaultSymbol: product.defaultSymbol,
       exchange: "上海期货交易所",
-      contractUnit: "5吨/手",
-      priceUnit: "元/吨",
+      contractUnit: product.contractUnit,
+      priceUnit: product.priceUnit,
       source: "新浪财经期货行情接口",
-      sourceUrl: "https://gu.sina.cn/ft/hq/nf.php?symbol=AL0",
+      sourceUrl: product.sourceUrl,
       fetchedAt: new Date().toISOString(),
       requestedSymbols: symbols,
       quotes
@@ -375,25 +445,33 @@ async function handleQuote(req, res, url) {
 
 async function handleKline(req, res, url) {
   try {
-    const symbol = normalizeSymbol(url.searchParams.get("symbol") || "nf_AL0");
+    const requestedSymbol = url.searchParams.get("symbol");
+    const productKey = normalizeProduct(
+      url.searchParams.get("product"),
+      productKeyFromSymbol(requestedSymbol) || DEFAULT_PRODUCT
+    );
+    const product = productConfig(productKey);
+    const symbol = normalizeSymbol(requestedSymbol || product.defaultSymbol, productKey);
     const interval = normalizeInterval(url.searchParams.get("interval"));
     const config = KLINE_INTERVALS[interval];
     const requestedLimit = Number(url.searchParams.get("limit") || config.limit);
     const limit = clamp(Number.isFinite(requestedLimit) ? requestedLimit : config.limit, 30, 500);
 
     if (!symbol) {
-      sendJson(res, 400, { error: "No valid aluminum futures symbol requested." });
+      sendJson(res, 400, { error: "No valid futures symbol requested." });
       return;
     }
 
     const candles = await loadKline(symbol, interval);
     sendJson(res, 200, {
-      product: "沪铝期货",
+      productKey,
+      product: product.product,
+      productLabel: product.label,
       symbol,
       code: symbolToSinaCode(symbol),
       interval,
       intervalLabel: config.label,
-      priceUnit: "元/吨",
+      priceUnit: product.priceUnit,
       source:
         config.source.includes("aggregate")
           ? "新浪财经期货 K 线接口，服务端聚合"
@@ -444,7 +522,7 @@ const server = http.createServer((req, res) => {
   if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/health") {
     sendJson(res, 200, {
       ok: true,
-      service: "shfe-aluminum-app",
+      service: "shfe-futures-app",
       time: new Date().toISOString()
     });
     return;
@@ -470,5 +548,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`SHFE aluminum app is running on ${HOST}:${PORT}`);
+  console.log(`SHFE futures app is running at http://localhost:${PORT}`);
 });
