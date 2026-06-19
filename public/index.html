@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b7f8f" />
+    <meta name="description" content="沪铝期货行情，可安装到手机和电脑的 PWA 应用。" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <link rel="stylesheet" href="/styles.css?v=8" />
+    <title>沪铝期货行情</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="沪铝期货行情首页">
+          <span class="brand-mark">AL</span>
+          <span>
+            <span class="brand-title">沪铝期货行情</span>
+            <span class="brand-subtitle">SHFE Aluminum Futures</span>
+          </span>
+        </a>
+        <div class="top-actions">
+          <button class="ghost-button" id="installButton" type="button">安装</button>
+          <button class="icon-button" id="refreshButton" type="button" aria-label="刷新行情">
+            <span aria-hidden="true">↻</span>
+          </button>
+        </div>
+      </header>
+
+      <main>
+        <section class="quote-hero" aria-live="polite">
+          <div class="hero-main">
+            <div class="eyebrow-row">
+              <span id="contractBadge" class="contract-badge">AL0</span>
+              <span id="marketState" class="market-state">等待行情</span>
+            </div>
+            <h1 id="contractName">沪铝连续</h1>
+            <div class="price-row">
+              <span id="lastPrice" class="last-price">--</span>
+              <span class="price-unit">元/吨</span>
+            </div>
+            <div id="changeLine" class="change-line neutral">
+              <span>涨跌 --</span>
+              <span>涨跌幅 --</span>
+            </div>
+          </div>
+
+          <div class="hero-side">
+            <div class="metric">
+              <span>更新时间</span>
+              <strong id="quoteTime">--</strong>
+            </div>
+            <div class="metric">
+              <span>刷新频率</span>
+              <select id="refreshInterval" aria-label="刷新频率">
+                <option value="15000">15 秒</option>
+                <option value="30000">30 秒</option>
+                <option value="60000">1 分钟</option>
+              </select>
+            </div>
+            <div class="metric">
+              <span>数据状态</span>
+              <strong id="dataStatus">未连接</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="stats-grid" aria-label="行情指标">
+          <article class="stat-tile">
+            <span>今开</span>
+            <strong id="openPrice">--</strong>
+          </article>
+          <article class="stat-tile">
+            <span>最高</span>
+            <strong id="highPrice">--</strong>
+          </article>
+          <article class="stat-tile">
+            <span>最低</span>
+            <strong id="lowPrice">--</strong>
+          </article>
+          <article class="stat-tile">
+            <span>昨结</span>
+            <strong id="previousSettlement">--</strong>
+          </article>
+          <article class="stat-tile">
+            <span>买一</span>
+            <strong id="bidPrice">--</strong>
+          </article>
+          <article class="stat-tile">
+            <span>卖一</span>
+            <strong id="askPrice">--</strong>
+          </article>
+          <article class="stat-tile">
+            <span>成交量</span>
+            <strong id="volume">--</strong>
+          </article>
+          <article class="stat-tile">
+            <span>持仓量</span>
+            <strong id="openInterest">--</strong>
+          </article>
+        </section>
+
+        <section class="contract-panel">
+          <div class="section-heading">
+            <div>
+              <h2>合约报价</h2>
+              <p>点击任意合约切换主显示，并加载下方 K 线图</p>
+            </div>
+            <span id="fetchStamp" class="fetch-stamp">--</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>合约</th>
+                  <th>最新</th>
+                  <th>涨跌</th>
+                  <th>今开</th>
+                  <th>最高</th>
+                  <th>最低</th>
+                  <th>成交量</th>
+                  <th>持仓量</th>
+                </tr>
+              </thead>
+              <tbody id="contractsBody">
+                <tr>
+                  <td colspan="8" class="empty-cell">正在获取行情...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="chart-panel" id="klinePanel" aria-live="polite">
+          <div class="section-heading chart-heading">
+            <div>
+              <h2 id="klineTitle">日 K 线图</h2>
+              <p id="klineSubtitle">点击上方合约后显示对应日 K</p>
+            </div>
+            <div class="chart-actions">
+              <label>
+                <span>周期</span>
+                <select id="klineInterval" aria-label="K线周期">
+                  <option value="1d">日线</option>
+                  <option value="1h">1小时</option>
+                  <option value="3h">3小时</option>
+                  <option value="5h">5小时</option>
+                  <option value="1w">周线</option>
+                  <option value="1mo">月线</option>
+                </select>
+              </label>
+              <label>
+                <span>显示</span>
+                <select id="klineRange" aria-label="K线显示数量">
+                  <option value="60">60 根</option>
+                  <option value="120">120 根</option>
+                  <option value="240">240 根</option>
+                  <option value="500">全部</option>
+                </select>
+              </label>
+              <label>
+                <span>均线</span>
+                <select id="maPeriod" aria-label="均线周期">
+                  <option value="0">空</option>
+                  <option value="5">MA5</option>
+                  <option value="10">MA10</option>
+                  <option value="20">MA20</option>
+                  <option value="30">MA30</option>
+                </select>
+              </label>
+              <label>
+                <span>图表</span>
+                <select id="klineTheme" aria-label="K线图主题">
+                  <option value="light">白底</option>
+                  <option value="dark">黑底</option>
+                </select>
+              </label>
+              <label>
+                <span>策略</span>
+                <select id="strategySelect" aria-label="策略选择">
+                  <option value="none">空</option>
+                  <option value="al_update_1">铝更新1</option>
+                  <option value="al_best_1">铝-1Best</option>
+                  <option value="al_volume_price">铝：量价</option>
+                </select>
+              </label>
+              <span id="klineStatus" class="fetch-stamp">等待加载</span>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <div id="klineChart" class="chart-empty">正在等待合约行情...</div>
+          </div>
+          <div id="klineMeta" class="chart-meta"></div>
+        </section>
+
+        <section class="source-panel">
+          <div>
+            <h2>合约规格</h2>
+            <p>交易品种：铝；交易单位：5 吨/手；报价单位：元/吨；最小变动价位：5 元/吨。</p>
+          </div>
+          <div>
+            <h2>数据来源</h2>
+            <p>
+              行情来自新浪财经公开期货行情接口；K 线来自新浪财经期货 K 线接口；合约规格参考上海期货交易所铝期货说明。
+              行情可能延迟或短暂不可用，请以交易所及券商终端为准。
+            </p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <script src="/app.js?v=8" type="module"></script>
+  </body>
+</html>
