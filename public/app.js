@@ -37,6 +37,18 @@ const STRATEGY_SUFFIXES = {
   al_volume_price: "：量价"
 };
 
+const BACKTEST_PRICE_MODE_LABELS = {
+  ideal: "理想",
+  average: "平均",
+  extreme: "极端"
+};
+
+const BACKTEST_DIRECTION_LABELS = {
+  both: "双边",
+  long: "单边做多",
+  short: "单边做空"
+};
+
 const STRATEGY_CONFIGS = {
   al_update_1: {
     period: 24,
@@ -68,6 +80,8 @@ const STRATEGY_CONFIGS = {
 const savedStrategy = localStorage.getItem("strategy") || "none";
 const savedTheme = localStorage.getItem("klineTheme") || "light";
 const savedProduct = PRODUCT_CONFIGS[localStorage.getItem("product")] ? localStorage.getItem("product") : "al";
+const savedBacktestPriceMode = localStorage.getItem("backtestPriceMode") || "ideal";
+const savedBacktestDirection = localStorage.getItem("backtestDirection") || "both";
 
 function productConfig(productKey = savedProduct) {
   return PRODUCT_CONFIGS[productKey] || PRODUCT_CONFIGS.al;
@@ -96,6 +110,14 @@ const state = {
   maPeriod: Number(localStorage.getItem("maPeriod") || 5),
   strategy: STRATEGY_SUFFIXES[savedStrategy] ? savedStrategy : "none",
   klineTheme: savedTheme === "dark" ? "dark" : "light",
+  backtestStart: localStorage.getItem("backtestStart") || "",
+  backtestEnd: localStorage.getItem("backtestEnd") || "",
+  backtestPriceMode: BACKTEST_PRICE_MODE_LABELS[savedBacktestPriceMode]
+    ? savedBacktestPriceMode
+    : "ideal",
+  backtestDirection: BACKTEST_DIRECTION_LABELS[savedBacktestDirection]
+    ? savedBacktestDirection
+    : "both",
   klinePayload: null,
   klineCacheMode: false,
   klineSymbol: null,
@@ -138,8 +160,13 @@ const els = {
   maPeriod: document.querySelector("#maPeriod"),
   klineTheme: document.querySelector("#klineTheme"),
   strategySelect: document.querySelector("#strategySelect"),
+  backtestStart: document.querySelector("#backtestStart"),
+  backtestEnd: document.querySelector("#backtestEnd"),
+  backtestPriceMode: document.querySelector("#backtestPriceMode"),
+  backtestDirection: document.querySelector("#backtestDirection"),
   klineChart: document.querySelector("#klineChart"),
   klineMeta: document.querySelector("#klineMeta"),
+  backtestMeta: document.querySelector("#backtestMeta"),
   productSpecText: document.querySelector("#productSpecText"),
   toast: document.querySelector("#toast")
 };
@@ -411,6 +438,7 @@ async function fetchKline(symbol = state.selectedSymbol) {
   els.klineChart.className = "chart-empty";
   els.klineChart.textContent = "正在加载 K 线...";
   els.klineMeta.innerHTML = "";
+  els.backtestMeta.innerHTML = "";
 
   const cacheKey = klineCacheKey(symbol, interval, state.klineLimit, productAtRequest);
 
@@ -520,13 +548,14 @@ function strategyThreshold(lineValues, threshold, index) {
   return lineValues[threshold]?.[index] ?? null;
 }
 
-function strategySignal(index, label, price, className, dy) {
+function strategySignal(index, label, price, className, dy, type = "position") {
   return {
     index,
     label,
     price,
     className,
-    dy
+    dy,
+    type
   };
 }
 
@@ -545,9 +574,9 @@ function alternatingSignals(candles, rawBuy, rawSell) {
     const sellSignal = sell0 && !buy0;
 
     if (buySignal) {
-      signals.push(strategySignal(index, "升高", candles[index].low, "strategy-buy", 16));
+      signals.push(strategySignal(index, "升高", candles[index].low, "strategy-buy", 16, "buy"));
     } else if (sellSignal) {
-      signals.push(strategySignal(index, "降低", candles[index].high, "strategy-sell", -8));
+      signals.push(strategySignal(index, "降低", candles[index].high, "strategy-sell", -8, "sell"));
     }
 
     lastBuyDistance = rawBuy[index] ? 0 : lastBuyDistance + 1;
@@ -635,6 +664,227 @@ function computeStrategy(candles, strategyKey) {
   };
 }
 
+function candleTimestamp(date) {
+  if (!date) return Number.NaN;
+  const normalized = date.includes(" ") ? date.replace(" ", "T") : `${date}T00:00:00`;
+  return new Date(`${normalized}+08:00`).getTime();
+}
+
+function inputValueFromCandleDate(date) {
+  if (!date) return "";
+  if (date.includes(" ")) {
+    const [day, time] = date.split(" ");
+    return `${day}T${time.slice(0, 5)}`;
+  }
+  return `${date.slice(0, 10)}T00:00`;
+}
+
+function inputTimestamp(value) {
+  if (!value) return null;
+  const normalized = value.length === 16 ? `${value}:00` : value;
+  const parsed = new Date(`${normalized}+08:00`).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatRate(value) {
+  if (!isFiniteNumber(value)) return "--";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${(value * 100).toFixed(2)}%`;
+}
+
+function backtestPrice(candle, signalType, mode) {
+  if (mode === "average") {
+    return (candle.open + candle.high + candle.low + candle.close) / 4;
+  }
+  if (mode === "ideal") {
+    return signalType === "buy" ? candle.low : candle.high;
+  }
+  return signalType === "buy" ? candle.high : candle.low;
+}
+
+function syncBacktestRangeControls(candles) {
+  if (!candles.length) return;
+
+  const firstValue = inputValueFromCandleDate(candles[0].date);
+  const lastValue = inputValueFromCandleDate(candles[candles.length - 1].date);
+  const firstTs = inputTimestamp(firstValue);
+  const lastTs = inputTimestamp(lastValue);
+  const startTs = inputTimestamp(state.backtestStart);
+  const endTs = inputTimestamp(state.backtestEnd);
+
+  els.backtestStart.min = firstValue;
+  els.backtestStart.max = lastValue;
+  els.backtestEnd.min = firstValue;
+  els.backtestEnd.max = lastValue;
+
+  if (!state.backtestStart || startTs < firstTs || startTs > lastTs) {
+    state.backtestStart = firstValue;
+  }
+  if (!state.backtestEnd || endTs < firstTs || endTs > lastTs) {
+    state.backtestEnd = lastValue;
+  }
+  if (inputTimestamp(state.backtestStart) > inputTimestamp(state.backtestEnd)) {
+    state.backtestStart = firstValue;
+    state.backtestEnd = lastValue;
+  }
+
+  els.backtestStart.value = state.backtestStart;
+  els.backtestEnd.value = state.backtestEnd;
+}
+
+function closeBacktestPosition(position, signal, candle, mode) {
+  const exitPrice = backtestPrice(candle, signal.type, mode);
+  const returnRate =
+    position.side === "long"
+      ? (exitPrice - position.entryPrice) / position.entryPrice
+      : (position.entryPrice - exitPrice) / position.entryPrice;
+
+  return {
+    side: position.side,
+    entryDate: position.entryDate,
+    exitDate: candle.date,
+    entryPrice: position.entryPrice,
+    exitPrice,
+    returnRate
+  };
+}
+
+function computeBacktest(candles, strategy) {
+  if (!strategy) return { status: "no-strategy", trades: [] };
+
+  const startTs = inputTimestamp(state.backtestStart);
+  const endTs = inputTimestamp(state.backtestEnd);
+  if (startTs !== null && endTs !== null && startTs > endTs) {
+    return { status: "invalid-range", trades: [] };
+  }
+
+  const mode = state.backtestPriceMode;
+  const direction = state.backtestDirection;
+  const signals = strategy.signals
+    .filter((signal) => signal.type === "buy" || signal.type === "sell")
+    .filter((signal) => {
+      const ts = candleTimestamp(candles[signal.index]?.date);
+      if (!Number.isFinite(ts)) return false;
+      return (startTs === null || ts >= startTs) && (endTs === null || ts <= endTs);
+    });
+
+  const trades = [];
+  let position = null;
+
+  const openPosition = (side, signal, candle) => {
+    position = {
+      side,
+      entryDate: candle.date,
+      entryPrice: backtestPrice(candle, signal.type, mode)
+    };
+  };
+
+  for (const signal of signals) {
+    const candle = candles[signal.index];
+    if (!candle) continue;
+
+    if (direction === "long") {
+      if (signal.type === "buy" && !position) openPosition("long", signal, candle);
+      if (signal.type === "sell" && position?.side === "long") {
+        trades.push(closeBacktestPosition(position, signal, candle, mode));
+        position = null;
+      }
+      continue;
+    }
+
+    if (direction === "short") {
+      if (signal.type === "sell" && !position) openPosition("short", signal, candle);
+      if (signal.type === "buy" && position?.side === "short") {
+        trades.push(closeBacktestPosition(position, signal, candle, mode));
+        position = null;
+      }
+      continue;
+    }
+
+    if (signal.type === "buy") {
+      if (position?.side === "short") {
+        trades.push(closeBacktestPosition(position, signal, candle, mode));
+        position = null;
+      }
+      if (!position) openPosition("long", signal, candle);
+    }
+
+    if (signal.type === "sell") {
+      if (position?.side === "long") {
+        trades.push(closeBacktestPosition(position, signal, candle, mode));
+        position = null;
+      }
+      if (!position) openPosition("short", signal, candle);
+    }
+  }
+
+  const totalReturn = trades.reduce((equity, trade) => equity * (1 + trade.returnRate), 1) - 1;
+  const wins = trades.filter((trade) => trade.returnRate > 0).length;
+  const averageReturn =
+    trades.length > 0
+      ? trades.reduce((sum, trade) => sum + trade.returnRate, 0) / trades.length
+      : null;
+  const bestReturn = trades.length ? Math.max(...trades.map((trade) => trade.returnRate)) : null;
+  const worstReturn = trades.length ? Math.min(...trades.map((trade) => trade.returnRate)) : null;
+
+  return {
+    status: "ok",
+    trades,
+    totalReturn,
+    winRate: trades.length ? wins / trades.length : null,
+    averageReturn,
+    bestReturn,
+    worstReturn,
+    openPosition: position
+  };
+}
+
+function formatBacktestRange() {
+  const start = state.backtestStart ? state.backtestStart.replace("T", " ") : "--";
+  const end = state.backtestEnd ? state.backtestEnd.replace("T", " ") : "--";
+  return `${start} 至 ${end}`;
+}
+
+function renderBacktest(candles, strategy) {
+  if (!candles.length) {
+    els.backtestMeta.innerHTML = "";
+    return;
+  }
+
+  if (!strategy) {
+    els.backtestMeta.innerHTML = `
+      <div><span>策略回测</span><strong>选择策略后计算</strong></div>
+      <div><span>时间范围</span><strong>${escapeHtml(formatBacktestRange())}</strong></div>
+      <div><span>成交价</span><strong>${BACKTEST_PRICE_MODE_LABELS[state.backtestPriceMode]}</strong></div>
+      <div><span>方向</span><strong>${BACKTEST_DIRECTION_LABELS[state.backtestDirection]}</strong></div>
+    `;
+    return;
+  }
+
+  const result = computeBacktest(candles, strategy);
+  if (result.status === "invalid-range") {
+    els.backtestMeta.innerHTML =
+      "<div><span>策略回测</span><strong>开始时间不能晚于结束时间</strong></div>";
+    return;
+  }
+
+  const openPositionText = result.openPosition
+    ? `${result.openPosition.side === "long" ? "多单" : "空单"}未平仓`
+    : "无";
+  const tradeCount = result.trades.length;
+
+  els.backtestMeta.innerHTML = `
+    <div><span>回测收益率</span><strong class="${trendClass(result.totalReturn)}">${tradeCount ? formatRate(result.totalReturn) : "--"}</strong></div>
+    <div><span>完成交易</span><strong>${tradeCount} 笔</strong></div>
+    <div><span>胜率</span><strong>${result.winRate === null ? "--" : formatRate(result.winRate)}</strong></div>
+    <div><span>平均单笔</span><strong class="${trendClass(result.averageReturn)}">${result.averageReturn === null ? "--" : formatRate(result.averageReturn)}</strong></div>
+    <div><span>最佳 / 最差</span><strong>${result.bestReturn === null ? "--" : `${formatRate(result.bestReturn)} / ${formatRate(result.worstReturn)}`}</strong></div>
+    <div><span>成交价</span><strong>${BACKTEST_PRICE_MODE_LABELS[state.backtestPriceMode]}</strong></div>
+    <div><span>方向</span><strong>${BACKTEST_DIRECTION_LABELS[state.backtestDirection]}</strong></div>
+    <div><span>未平仓</span><strong>${openPositionText}</strong></div>
+  `;
+}
+
 function renderKline(payload, cacheMode = false) {
   state.klinePayload = payload;
   state.klineCacheMode = cacheMode;
@@ -667,6 +917,8 @@ function renderKline(payload, cacheMode = false) {
     strategy
   );
   setupChartPointer(candles);
+  syncBacktestRangeControls(candles);
+  renderBacktest(candles, strategy);
   els.klineMeta.innerHTML = latest
     ? `
       <div><span>时间</span><strong>${escapeHtml(latest.date)}</strong></div>
@@ -1059,6 +1311,46 @@ updateProductUi();
 els.strategySelect.addEventListener("change", () => {
   state.strategy = els.strategySelect.value;
   localStorage.setItem("strategy", state.strategy);
+  if (state.klinePayload) {
+    renderKline(state.klinePayload, state.klineCacheMode);
+  }
+});
+
+els.backtestPriceMode.value = state.backtestPriceMode;
+els.backtestPriceMode.addEventListener("change", () => {
+  state.backtestPriceMode = BACKTEST_PRICE_MODE_LABELS[els.backtestPriceMode.value]
+    ? els.backtestPriceMode.value
+    : "ideal";
+  localStorage.setItem("backtestPriceMode", state.backtestPriceMode);
+  if (state.klinePayload) {
+    renderKline(state.klinePayload, state.klineCacheMode);
+  }
+});
+
+els.backtestDirection.value = state.backtestDirection;
+els.backtestDirection.addEventListener("change", () => {
+  state.backtestDirection = BACKTEST_DIRECTION_LABELS[els.backtestDirection.value]
+    ? els.backtestDirection.value
+    : "both";
+  localStorage.setItem("backtestDirection", state.backtestDirection);
+  if (state.klinePayload) {
+    renderKline(state.klinePayload, state.klineCacheMode);
+  }
+});
+
+els.backtestStart.value = state.backtestStart;
+els.backtestStart.addEventListener("change", () => {
+  state.backtestStart = els.backtestStart.value;
+  localStorage.setItem("backtestStart", state.backtestStart);
+  if (state.klinePayload) {
+    renderKline(state.klinePayload, state.klineCacheMode);
+  }
+});
+
+els.backtestEnd.value = state.backtestEnd;
+els.backtestEnd.addEventListener("change", () => {
+  state.backtestEnd = els.backtestEnd.value;
+  localStorage.setItem("backtestEnd", state.backtestEnd);
   if (state.klinePayload) {
     renderKline(state.klinePayload, state.klineCacheMode);
   }

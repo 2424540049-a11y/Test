@@ -359,13 +359,18 @@ main {
   font-size: 13px;
 }
 
-.chart-actions select {
+.chart-actions select,
+.chart-actions input {
   min-height: 38px;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 0 10px;
   color: var(--ink);
   background: #ffffff;
+}
+
+.chart-actions input {
+  width: 166px;
 }
 
 .chart-wrap {
@@ -641,6 +646,36 @@ main {
   line-height: 1.5;
 }
 
+.backtest-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  border-top: 1px solid var(--line);
+  background: var(--line);
+}
+
+.backtest-meta:empty {
+  display: none;
+}
+
+.backtest-meta div {
+  min-height: 72px;
+  padding: 14px 18px;
+  background: #fbfdfe;
+}
+
+.backtest-meta span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.backtest-meta strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 17px;
+}
+
 .chart-meta {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -762,6 +797,7 @@ td strong {
     grid-template-columns: 1fr;
   }
 
+  .backtest-meta,
   .chart-meta {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -821,6 +857,15 @@ td strong {
   .chart-actions {
     justify-content: flex-start;
     width: 100%;
+  }
+
+  .chart-actions input {
+    width: 100%;
+  }
+
+  .backtest-meta,
+  .chart-meta {
+    grid-template-columns: 1fr;
   }
 
   .kline-chart,

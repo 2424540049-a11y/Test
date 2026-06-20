@@ -8,7 +8,7 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-    <link rel="stylesheet" href="/styles.css?v=10" />
+    <link rel="stylesheet" href="/styles.css?v=11" />
     <title>期货行情</title>
   </head>
   <body>
@@ -193,12 +193,37 @@
                   <option value="al_volume_price">铝：量价</option>
                 </select>
               </label>
+              <label>
+                <span>回测开始</span>
+                <input id="backtestStart" type="datetime-local" aria-label="回测开始时间" />
+              </label>
+              <label>
+                <span>回测结束</span>
+                <input id="backtestEnd" type="datetime-local" aria-label="回测结束时间" />
+              </label>
+              <label>
+                <span>成交价</span>
+                <select id="backtestPriceMode" aria-label="回测成交价假设">
+                  <option value="ideal">理想</option>
+                  <option value="average">平均</option>
+                  <option value="extreme">极端</option>
+                </select>
+              </label>
+              <label>
+                <span>方向</span>
+                <select id="backtestDirection" aria-label="回测交易方向">
+                  <option value="both">双边</option>
+                  <option value="long">单边做多</option>
+                  <option value="short">单边做空</option>
+                </select>
+              </label>
               <span id="klineStatus" class="fetch-stamp">等待加载</span>
             </div>
           </div>
           <div class="chart-wrap">
             <div id="klineChart" class="chart-empty">正在等待合约行情...</div>
           </div>
+          <div id="backtestMeta" class="backtest-meta"></div>
           <div id="klineMeta" class="chart-meta"></div>
         </section>
 
@@ -219,6 +244,6 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-    <script src="/app.js?v=10" type="module"></script>
+    <script src="/app.js?v=11" type="module"></script>
   </body>
 </html>
