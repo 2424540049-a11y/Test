@@ -50,7 +50,7 @@ const BACKTEST_DIRECTION_LABELS = {
 };
 
 const KLINE_MIN_DATE = "2020-01-01";
-const KLINE_ZOOM_LEVELS = [0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12];
+const KLINE_ZOOM_LEVELS = [0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12];
 const KLINE_DEFAULT_ZOOM = 1;
 const KLINE_MAX_CHART_WIDTH = 90000;
 

@@ -38,7 +38,7 @@ http://localhost:8787
 .\start-public.ps1
 ```
 
-脚本会打印一个 `https://...trycloudflare.com/?v=13` 地址。手机或其他电脑打开这个地址即可访问。
+脚本会打印一个 `https://...trycloudflare.com/?v=14` 地址。手机或其他电脑打开这个地址即可访问。
 
 这是临时地址，关闭电脑、关闭本地服务或关闭 Cloudflare Tunnel 后就会失效；下次运行脚本会生成新的地址。
 
