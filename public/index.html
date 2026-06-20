@@ -8,7 +8,7 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-    <link rel="stylesheet" href="/styles.css?v=12" />
+    <link rel="stylesheet" href="/styles.css?v=13" />
     <title>期货行情</title>
   </head>
   <body>
@@ -183,6 +183,13 @@
                   <option value="dark">黑底</option>
                 </select>
               </label>
+              <div class="chart-control zoom-control" aria-label="K线缩放">
+                <span>缩放</span>
+                <button id="zoomOutButton" type="button" aria-label="缩小K线">-</button>
+                <strong id="zoomValue">1x</strong>
+                <button id="zoomInButton" type="button" aria-label="放大K线">+</button>
+                <button id="zoomResetButton" type="button">重置</button>
+              </div>
               <label>
                 <span>策略</span>
                 <select id="strategySelect" aria-label="策略选择">
@@ -219,7 +226,7 @@
               <span id="klineStatus" class="fetch-stamp">等待加载</span>
             </div>
           </div>
-          <div class="chart-wrap">
+          <div class="chart-wrap" id="chartWrap">
             <div id="klineChart" class="chart-empty">正在等待合约行情...</div>
           </div>
           <div id="backtestMeta" class="backtest-meta"></div>
@@ -243,6 +250,6 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-    <script src="/app.js?v=12" type="module"></script>
+    <script src="/app.js?v=13" type="module"></script>
   </body>
 </html>

@@ -50,6 +50,9 @@ const BACKTEST_DIRECTION_LABELS = {
 };
 
 const KLINE_MIN_DATE = "2020-01-01";
+const KLINE_ZOOM_LEVELS = [0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12];
+const KLINE_DEFAULT_ZOOM = 1;
+const KLINE_MAX_CHART_WIDTH = 90000;
 
 const STRATEGY_CONFIGS = {
   al_update_1: {
@@ -86,6 +89,7 @@ const savedBacktestPriceMode = localStorage.getItem("backtestPriceMode") || "ide
 const savedBacktestDirection = localStorage.getItem("backtestDirection") || "both";
 const savedKlineStart = localStorage.getItem("klineStart") || KLINE_MIN_DATE;
 const savedKlineEnd = localStorage.getItem("klineEnd") || todayDateValue();
+const savedKlineZoom = Number(localStorage.getItem("klineZoom") || KLINE_DEFAULT_ZOOM);
 
 function productConfig(productKey = savedProduct) {
   return PRODUCT_CONFIGS[productKey] || PRODUCT_CONFIGS.al;
@@ -123,6 +127,30 @@ function clampDateValue(value, minValue, maxValue) {
   return value;
 }
 
+function zoomIndex(value) {
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) return KLINE_ZOOM_LEVELS.indexOf(KLINE_DEFAULT_ZOOM);
+
+  let closestIndex = 0;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  KLINE_ZOOM_LEVELS.forEach((level, index) => {
+    const distance = Math.abs(level - normalized);
+    if (distance < closestDistance) {
+      closestIndex = index;
+      closestDistance = distance;
+    }
+  });
+  return closestIndex;
+}
+
+function normalizeZoom(value) {
+  return KLINE_ZOOM_LEVELS[zoomIndex(value)] || KLINE_DEFAULT_ZOOM;
+}
+
+function zoomLabel(value) {
+  return `${String(value).replace(/\.0$/, "")}x`;
+}
+
 const state = {
   payload: null,
   product: savedProduct,
@@ -137,6 +165,7 @@ const state = {
   maPeriod: Number(localStorage.getItem("maPeriod") || 5),
   strategy: STRATEGY_SUFFIXES[savedStrategy] ? savedStrategy : "none",
   klineTheme: savedTheme === "dark" ? "dark" : "light",
+  klineZoom: normalizeZoom(savedKlineZoom),
   backtestStart: localStorage.getItem("backtestStart") || "",
   backtestEnd: localStorage.getItem("backtestEnd") || "",
   backtestPriceMode: BACKTEST_PRICE_MODE_LABELS[savedBacktestPriceMode]
@@ -187,11 +216,16 @@ const els = {
   klineEnd: document.querySelector("#klineEnd"),
   maPeriod: document.querySelector("#maPeriod"),
   klineTheme: document.querySelector("#klineTheme"),
+  zoomOutButton: document.querySelector("#zoomOutButton"),
+  zoomInButton: document.querySelector("#zoomInButton"),
+  zoomResetButton: document.querySelector("#zoomResetButton"),
+  zoomValue: document.querySelector("#zoomValue"),
   strategySelect: document.querySelector("#strategySelect"),
   backtestStart: document.querySelector("#backtestStart"),
   backtestEnd: document.querySelector("#backtestEnd"),
   backtestPriceMode: document.querySelector("#backtestPriceMode"),
   backtestDirection: document.querySelector("#backtestDirection"),
+  chartWrap: document.querySelector("#chartWrap"),
   klineChart: document.querySelector("#klineChart"),
   klineMeta: document.querySelector("#klineMeta"),
   backtestMeta: document.querySelector("#backtestMeta"),
@@ -495,6 +529,7 @@ async function fetchKline(symbol = state.selectedSymbol) {
   els.klineSubtitle.textContent = `正在加载${label}数据...`;
   els.klineStatus.textContent = "加载中";
   els.klineChart.className = "chart-empty";
+  resetChartWidth();
   els.klineChart.textContent = "正在加载 K 线...";
   els.klineMeta.innerHTML = "";
   els.backtestMeta.innerHTML = "";
@@ -543,6 +578,7 @@ async function fetchKline(symbol = state.selectedSymbol) {
       els.klineStatus.textContent = "加载失败";
       els.klineSubtitle.textContent = "K 线数据暂时不可用";
       els.klineChart.className = "chart-empty";
+      resetChartWidth();
       els.klineChart.textContent = `K 线获取失败：${error.message}`;
     }
   }
@@ -948,6 +984,53 @@ function renderBacktest(candles, strategy) {
   `;
 }
 
+function chartWidthForCandles(candles, interval) {
+  const perCandle = isIntradayInterval(interval) ? 5.5 : interval === "1d" ? 7 : 11;
+  const width = 760 + candles.length * perCandle * state.klineZoom;
+  return Math.round(clamp(width, 760, KLINE_MAX_CHART_WIDTH));
+}
+
+function applyChartWidth(width) {
+  els.klineChart.style.width = `${width}px`;
+  els.klineChart.style.minWidth = `${width}px`;
+}
+
+function resetChartWidth() {
+  els.klineChart.style.width = "";
+  els.klineChart.style.minWidth = "";
+}
+
+function updateZoomUi() {
+  const index = zoomIndex(state.klineZoom);
+  els.zoomValue.textContent = zoomLabel(state.klineZoom);
+  els.zoomOutButton.disabled = index <= 0;
+  els.zoomInButton.disabled = index >= KLINE_ZOOM_LEVELS.length - 1;
+  els.zoomResetButton.disabled = state.klineZoom === KLINE_DEFAULT_ZOOM;
+}
+
+function setKlineZoom(value) {
+  const wrap = els.chartWrap;
+  const centerRatio =
+    wrap && wrap.scrollWidth > 0
+      ? (wrap.scrollLeft + wrap.clientWidth / 2) / wrap.scrollWidth
+      : 0.5;
+
+  state.klineZoom = normalizeZoom(value);
+  localStorage.setItem("klineZoom", String(state.klineZoom));
+  updateZoomUi();
+
+  if (state.klinePayload) {
+    renderKline(state.klinePayload, state.klineCacheMode);
+    window.requestAnimationFrame(() => {
+      if (!els.chartWrap) return;
+      els.chartWrap.scrollLeft = Math.max(
+        0,
+        centerRatio * els.chartWrap.scrollWidth - els.chartWrap.clientWidth / 2
+      );
+    });
+  }
+}
+
 function renderKline(payload, cacheMode = false) {
   state.klinePayload = payload;
   state.klineCacheMode = cacheMode;
@@ -967,18 +1050,21 @@ function renderKline(payload, cacheMode = false) {
   const openInterestLabel = latest?.openInterest === null ? "累计量" : "持仓量";
   const openInterestValue =
     latest?.openInterest === null ? latest?.cumulativeVolume : latest?.openInterest;
+  const chartWidth = chartWidthForCandles(candles, payload.interval);
 
   els.klineTitle.textContent = `${quote?.name || payload.code} ${label} K线`;
-  els.klineSubtitle.textContent = `${label} · 最近 ${candles.length} 根 · ${maText}${strategyText} · ${payload.priceUnit}`;
   els.klineStatus.textContent = cacheMode ? "离线缓存" : `更新 ${localTime(payload.fetchedAt)}`;
-  els.klineSubtitle.textContent = `${label} · ${formatKlineRange(payload.requestedStart || state.klineStart, payload.requestedEnd || state.klineEnd)} · ${candles.length} 根 · ${maText}${strategyText} · ${payload.priceUnit}`;
+  els.klineSubtitle.textContent = `${label} · ${formatKlineRange(payload.requestedStart || state.klineStart, payload.requestedEnd || state.klineEnd)} · ${candles.length} 根 · 缩放 ${zoomLabel(state.klineZoom)} · ${maText}${strategyText} · ${payload.priceUnit}`;
   els.klineChart.className = `kline-chart theme-${state.klineTheme}`;
+  applyChartWidth(chartWidth);
+  updateZoomUi();
   els.klineChart.innerHTML = buildKlineSvg(
     candles,
     maValues,
     state.maPeriod,
     payload.interval,
-    strategy
+    strategy,
+    chartWidth
   );
   setupChartPointer(candles);
   syncBacktestRangeControls(candles);
@@ -1115,10 +1201,10 @@ function setupChartPointer(candles) {
   svg.addEventListener("pointerleave", hidePointer);
 }
 
-function buildKlineSvg(candles, maValues, maPeriod, interval, strategy) {
+function buildKlineSvg(candles, maValues, maPeriod, interval, strategy, chartWidth = 980) {
   if (!candles.length) return "";
 
-  const width = 980;
+  const width = chartWidth;
   const height = 468;
   const margin = { top: 24, right: 64, bottom: 44, left: 70 };
   const priceTop = margin.top;
@@ -1376,6 +1462,21 @@ els.klineTheme.addEventListener("change", () => {
   if (state.klinePayload) {
     renderKline(state.klinePayload, state.klineCacheMode);
   }
+});
+
+updateZoomUi();
+els.zoomOutButton.addEventListener("click", () => {
+  const index = zoomIndex(state.klineZoom);
+  setKlineZoom(KLINE_ZOOM_LEVELS[Math.max(0, index - 1)]);
+});
+
+els.zoomInButton.addEventListener("click", () => {
+  const index = zoomIndex(state.klineZoom);
+  setKlineZoom(KLINE_ZOOM_LEVELS[Math.min(KLINE_ZOOM_LEVELS.length - 1, index + 1)]);
+});
+
+els.zoomResetButton.addEventListener("click", () => {
+  setKlineZoom(KLINE_DEFAULT_ZOOM);
 });
 
 els.strategySelect.value = state.strategy;

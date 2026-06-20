@@ -359,6 +359,43 @@ main {
   font-size: 13px;
 }
 
+.chart-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.zoom-control button {
+  min-width: 34px;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: #ffffff;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.zoom-control button:last-child {
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.zoom-control button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.zoom-control strong {
+  min-width: 42px;
+  color: var(--ink);
+  text-align: center;
+  font-size: 14px;
+}
+
 .chart-actions select,
 .chart-actions input {
   min-height: 38px;
@@ -375,6 +412,7 @@ main {
 
 .chart-wrap {
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   border-top: 1px solid var(--line);
   background: #ffffff;
 }
