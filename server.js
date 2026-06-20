@@ -11,6 +11,8 @@ const SINA_QUOTE_ENDPOINT = "https://hq.sinajs.cn/list=";
 const SINA_KLINE_ENDPOINT =
   "https://stock2.finance.sina.com.cn/futures/api/jsonp.php";
 const SINA_REFERER = "https://finance.sina.com.cn/";
+const KLINE_MIN_DATE = "2020-01-01";
+const KLINE_MAX_BARS = 30000;
 
 const DEFAULT_PRODUCT = "al";
 const PRODUCT_CONFIGS = {
@@ -185,6 +187,38 @@ function parseDateParts(date) {
 function chinaTimestamp(value) {
   const normalized = value.includes(" ") ? value.replace(" ", "T") : `${value}T00:00:00`;
   return new Date(`${normalized}+08:00`).getTime();
+}
+
+function dateValue(date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+function parseRangeTimestamp(value, boundary = "start") {
+  const clean = String(value || "").trim();
+  if (!clean) return null;
+
+  const dateOnly = clean.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) {
+    const time = boundary === "end" ? "23:59:59" : "00:00:00";
+    return chinaTimestamp(`${clean} ${time}`);
+  }
+
+  const dateTime = clean.match(/^(\d{4})-(\d{2})-(\d{2})(?:T| )(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!dateTime) return null;
+
+  const seconds = dateTime[6] || "00";
+  return chinaTimestamp(`${dateTime[1]}-${dateTime[2]}-${dateTime[3]} ${dateTime[4]}:${dateTime[5]}:${seconds}`);
+}
+
+function filterCandlesByRange(candles, startTs, endTs) {
+  return candles.filter((candle) => {
+    const ts = chinaTimestamp(candle.date);
+    return (
+      Number.isFinite(ts) &&
+      (startTs === null || ts >= startTs) &&
+      (endTs === null || ts <= endTs)
+    );
+  });
 }
 
 function isoWeekKey(date) {
@@ -454,8 +488,15 @@ async function handleKline(req, res, url) {
     const symbol = normalizeSymbol(requestedSymbol || product.defaultSymbol, productKey);
     const interval = normalizeInterval(url.searchParams.get("interval"));
     const config = KLINE_INTERVALS[interval];
-    const requestedLimit = Number(url.searchParams.get("limit") || config.limit);
-    const limit = clamp(Number.isFinite(requestedLimit) ? requestedLimit : config.limit, 30, 500);
+    const today = dateValue(new Date());
+    const startTs =
+      parseRangeTimestamp(url.searchParams.get("start"), "start") ??
+      parseRangeTimestamp(KLINE_MIN_DATE, "start");
+    const endTs =
+      parseRangeTimestamp(url.searchParams.get("end"), "end") ??
+      parseRangeTimestamp(today, "end");
+    const requestedLimit = Number(url.searchParams.get("limit") || KLINE_MAX_BARS);
+    const limit = clamp(Number.isFinite(requestedLimit) ? requestedLimit : KLINE_MAX_BARS, 30, KLINE_MAX_BARS);
 
     if (!symbol) {
       sendJson(res, 400, { error: "No valid futures symbol requested." });
@@ -463,6 +504,8 @@ async function handleKline(req, res, url) {
     }
 
     const candles = await loadKline(symbol, interval);
+    const rangedCandles = filterCandlesByRange(candles, startTs, endTs);
+    const limitedCandles = rangedCandles.slice(-limit);
     sendJson(res, 200, {
       productKey,
       product: product.product,
@@ -478,8 +521,13 @@ async function handleKline(req, res, url) {
           : "新浪财经期货 K 线接口",
       fetchedAt: new Date().toISOString(),
       total: candles.length,
+      rangeTotal: rangedCandles.length,
       limit,
-      candles: candles.slice(-limit)
+      requestedStart: url.searchParams.get("start") || KLINE_MIN_DATE,
+      requestedEnd: url.searchParams.get("end") || today,
+      availableStart: candles[0]?.date || "",
+      availableEnd: candles[candles.length - 1]?.date || "",
+      candles: limitedCandles
     });
   } catch (error) {
     sendJson(res, 502, {

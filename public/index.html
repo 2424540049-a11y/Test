@@ -8,7 +8,7 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-    <link rel="stylesheet" href="/styles.css?v=11" />
+    <link rel="stylesheet" href="/styles.css?v=12" />
     <title>期货行情</title>
   </head>
   <body>
@@ -159,13 +159,12 @@
                 </select>
               </label>
               <label>
-                <span>显示</span>
-                <select id="klineRange" aria-label="K线显示数量">
-                  <option value="60">60 根</option>
-                  <option value="120">120 根</option>
-                  <option value="240">240 根</option>
-                  <option value="500">全部</option>
-                </select>
+                <span>行情开始</span>
+                <input id="klineStart" type="date" min="2020-01-01" aria-label="K线开始日期" />
+              </label>
+              <label>
+                <span>行情结束</span>
+                <input id="klineEnd" type="date" min="2020-01-01" aria-label="K线结束日期" />
               </label>
               <label>
                 <span>均线</span>
@@ -244,6 +243,6 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-    <script src="/app.js?v=11" type="module"></script>
+    <script src="/app.js?v=12" type="module"></script>
   </body>
 </html>

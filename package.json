@@ -2,13 +2,13 @@
   "name": "shfe-aluminum-app",
   "version": "1.0.0",
   "private": true,
-  "description": "Cloud-deployable PWA for SHFE futures quotes.",
+  "description": "Installable PWA for SHFE futures quotes.",
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "health": "node -e \"fetch('http://127.0.0.1:' + (process.env.PORT || 8787) + '/health').then(r => r.json()).then(console.log)\""
+    "icons": "powershell -ExecutionPolicy Bypass -File tools/make-icons.ps1"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=18"
   }
 }

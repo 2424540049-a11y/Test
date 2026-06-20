@@ -49,6 +49,8 @@ const BACKTEST_DIRECTION_LABELS = {
   short: "单边做空"
 };
 
+const KLINE_MIN_DATE = "2020-01-01";
+
 const STRATEGY_CONFIGS = {
   al_update_1: {
     period: 24,
@@ -82,6 +84,8 @@ const savedTheme = localStorage.getItem("klineTheme") || "light";
 const savedProduct = PRODUCT_CONFIGS[localStorage.getItem("product")] ? localStorage.getItem("product") : "al";
 const savedBacktestPriceMode = localStorage.getItem("backtestPriceMode") || "ideal";
 const savedBacktestDirection = localStorage.getItem("backtestDirection") || "both";
+const savedKlineStart = localStorage.getItem("klineStart") || KLINE_MIN_DATE;
+const savedKlineEnd = localStorage.getItem("klineEnd") || todayDateValue();
 
 function productConfig(productKey = savedProduct) {
   return PRODUCT_CONFIGS[productKey] || PRODUCT_CONFIGS.al;
@@ -97,6 +101,28 @@ function strategyLabel(strategyKey, productKey = savedProduct) {
   return `${productConfig(productKey).strategyPrefix}${suffix}`;
 }
 
+function dateInputValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function todayDateValue() {
+  return dateInputValue(new Date());
+}
+
+function isDateValue(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+}
+
+function clampDateValue(value, minValue, maxValue) {
+  if (!isDateValue(value)) return "";
+  if (value < minValue) return minValue;
+  if (value > maxValue) return maxValue;
+  return value;
+}
+
 const state = {
   payload: null,
   product: savedProduct,
@@ -105,7 +131,8 @@ const state = {
     (savedProduct === "al" ? localStorage.getItem("selectedSymbol") : "") ||
     productConfig(savedProduct).defaultSymbol,
   refreshMs: Number(localStorage.getItem("refreshMs") || 15000),
-  klineLimit: Number(localStorage.getItem("klineLimit") || 120),
+  klineStart: clampDateValue(savedKlineStart, KLINE_MIN_DATE, todayDateValue()) || KLINE_MIN_DATE,
+  klineEnd: clampDateValue(savedKlineEnd, KLINE_MIN_DATE, todayDateValue()) || todayDateValue(),
   klineInterval: localStorage.getItem("klineInterval") || "1d",
   maPeriod: Number(localStorage.getItem("maPeriod") || 5),
   strategy: STRATEGY_SUFFIXES[savedStrategy] ? savedStrategy : "none",
@@ -156,7 +183,8 @@ const els = {
   klineSubtitle: document.querySelector("#klineSubtitle"),
   klineStatus: document.querySelector("#klineStatus"),
   klineInterval: document.querySelector("#klineInterval"),
-  klineRange: document.querySelector("#klineRange"),
+  klineStart: document.querySelector("#klineStart"),
+  klineEnd: document.querySelector("#klineEnd"),
   maPeriod: document.querySelector("#maPeriod"),
   klineTheme: document.querySelector("#klineTheme"),
   strategySelect: document.querySelector("#strategySelect"),
@@ -261,8 +289,8 @@ function quoteCacheKey(productKey = state.product) {
   return `lastQuotePayload:${productKey}`;
 }
 
-function klineCacheKey(symbol, interval, limit, productKey = state.product) {
-  return `lastKlinePayload:${productKey}:${symbol}:${interval}:${limit}`;
+function klineCacheKey(symbol, interval, startDate, endDate, productKey = state.product) {
+  return `lastKlinePayload:${productKey}:${symbol}:${interval}:${startDate}:${endDate}`;
 }
 
 function updateStrategyOptions() {
@@ -391,6 +419,36 @@ function scheduleNext() {
   state.timer = window.setTimeout(fetchQuotes, state.refreshMs);
 }
 
+function normalizeKlineRange() {
+  const maxDate = todayDateValue();
+  let startDate = clampDateValue(state.klineStart, KLINE_MIN_DATE, maxDate) || KLINE_MIN_DATE;
+  let endDate = clampDateValue(state.klineEnd, KLINE_MIN_DATE, maxDate) || maxDate;
+
+  if (startDate > endDate) {
+    [startDate, endDate] = [endDate, startDate];
+  }
+
+  state.klineStart = startDate;
+  state.klineEnd = endDate;
+  localStorage.setItem("klineStart", startDate);
+  localStorage.setItem("klineEnd", endDate);
+
+  if (els.klineStart && els.klineEnd) {
+    els.klineStart.min = KLINE_MIN_DATE;
+    els.klineStart.max = maxDate;
+    els.klineStart.value = startDate;
+    els.klineEnd.min = KLINE_MIN_DATE;
+    els.klineEnd.max = maxDate;
+    els.klineEnd.value = endDate;
+  }
+
+  return { startDate, endDate };
+}
+
+function formatKlineRange(startDate = state.klineStart, endDate = state.klineEnd) {
+  return `${startDate} 至 ${endDate}`;
+}
+
 async function fetchQuotes() {
   setText("dataStatus", "刷新中");
   const productAtRequest = state.product;
@@ -430,6 +488,7 @@ async function fetchKline(symbol = state.selectedSymbol) {
   const interval = state.klineInterval;
   const productAtRequest = state.product;
   const label = intervalLabel(interval);
+  const { startDate, endDate } = normalizeKlineRange();
   state.klineSymbol = symbol;
   state.klineIntervalLoaded = interval;
   els.klineTitle.textContent = `${quote?.name || symbol.replace(/^nf_/, "")} ${label} K线`;
@@ -440,13 +499,13 @@ async function fetchKline(symbol = state.selectedSymbol) {
   els.klineMeta.innerHTML = "";
   els.backtestMeta.innerHTML = "";
 
-  const cacheKey = klineCacheKey(symbol, interval, state.klineLimit, productAtRequest);
+  const cacheKey = klineCacheKey(symbol, interval, startDate, endDate, productAtRequest);
 
   try {
     const response = await fetch(
       `/api/kline?product=${encodeURIComponent(productAtRequest)}&symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(
         interval
-      )}&limit=${state.klineLimit}&t=${Date.now()}`,
+      )}&start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&t=${Date.now()}`,
       { cache: "no-store" }
     );
     if (!response.ok) {
@@ -458,6 +517,8 @@ async function fetchKline(symbol = state.selectedSymbol) {
     if (
       productAtRequest !== state.product ||
       interval !== state.klineInterval ||
+      startDate !== state.klineStart ||
+      endDate !== state.klineEnd ||
       symbol !== state.selectedSymbol
     ) {
       return;
@@ -468,6 +529,8 @@ async function fetchKline(symbol = state.selectedSymbol) {
     if (
       productAtRequest !== state.product ||
       interval !== state.klineInterval ||
+      startDate !== state.klineStart ||
+      endDate !== state.klineEnd ||
       symbol !== state.selectedSymbol
     ) {
       return;
@@ -908,6 +971,7 @@ function renderKline(payload, cacheMode = false) {
   els.klineTitle.textContent = `${quote?.name || payload.code} ${label} K线`;
   els.klineSubtitle.textContent = `${label} · 最近 ${candles.length} 根 · ${maText}${strategyText} · ${payload.priceUnit}`;
   els.klineStatus.textContent = cacheMode ? "离线缓存" : `更新 ${localTime(payload.fetchedAt)}`;
+  els.klineSubtitle.textContent = `${label} · ${formatKlineRange(payload.requestedStart || state.klineStart, payload.requestedEnd || state.klineEnd)} · ${candles.length} 根 · ${maText}${strategyText} · ${payload.priceUnit}`;
   els.klineChart.className = `kline-chart theme-${state.klineTheme}`;
   els.klineChart.innerHTML = buildKlineSvg(
     candles,
@@ -1281,10 +1345,18 @@ els.klineInterval.addEventListener("change", () => {
   fetchKline(state.selectedSymbol);
 });
 
-els.klineRange.value = String(state.klineLimit);
-els.klineRange.addEventListener("change", () => {
-  state.klineLimit = Number(els.klineRange.value);
-  localStorage.setItem("klineLimit", String(state.klineLimit));
+normalizeKlineRange();
+els.klineStart.addEventListener("change", () => {
+  state.klineStart = els.klineStart.value;
+  normalizeKlineRange();
+  state.klineIntervalLoaded = null;
+  fetchKline(state.selectedSymbol);
+});
+
+els.klineEnd.addEventListener("change", () => {
+  state.klineEnd = els.klineEnd.value;
+  normalizeKlineRange();
+  state.klineIntervalLoaded = null;
   fetchKline(state.selectedSymbol);
 });
 
