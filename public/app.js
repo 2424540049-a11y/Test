@@ -54,7 +54,7 @@ const KLINE_MIN_DATE = "2005-01-01";
 const KLINE_ZOOM_LEVELS = [0.01, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12];
 const KLINE_DEFAULT_ZOOM = 0.01;
 const KLINE_MAX_CHART_WIDTH = 90000;
-const APP_STATE_VERSION = "2026-06-23-local-data-v1";
+const APP_STATE_VERSION = "2026-06-23-range-controls-v3";
 
 const STRATEGY_CONFIGS = {
   al_update_1: {
@@ -1328,6 +1328,9 @@ function renderBacktest(candles, strategy) {
 }
 
 function chartWidthForCandles(candles, interval) {
+  if (state.klineZoom <= KLINE_DEFAULT_ZOOM) {
+    return Math.max(760, Math.round(els.chartWrap?.clientWidth || 760));
+  }
   const perCandle = isIntradayInterval(interval) ? 5.5 : interval === "1d" ? 7 : 11;
   const width = 760 + candles.length * perCandle * state.klineZoom;
   return Math.round(clamp(width, 760, KLINE_MAX_CHART_WIDTH));
@@ -1374,6 +1377,26 @@ function setKlineZoom(value) {
   }
 }
 
+function resetKlineViewToFullRange() {
+  state.klineZoom = KLINE_DEFAULT_ZOOM;
+  localStorage.setItem("klineZoom", String(state.klineZoom));
+  updateZoomUi();
+  window.requestAnimationFrame(() => {
+    if (els.chartWrap) els.chartWrap.scrollLeft = 0;
+  });
+}
+
+function applyKlineRangeInputs() {
+  if (!isDateValue(els.klineStart.value) || !isDateValue(els.klineEnd.value)) return;
+
+  state.klineStart = els.klineStart.value;
+  state.klineEnd = els.klineEnd.value;
+  normalizeKlineRange();
+  resetKlineViewToFullRange();
+  state.klineIntervalLoaded = null;
+  fetchKline(state.selectedSymbol);
+}
+
 function renderKline(payload, cacheMode = false) {
   state.klinePayload = payload;
   state.klineCacheMode = cacheMode;
@@ -1410,6 +1433,11 @@ function renderKline(payload, cacheMode = false) {
     chartWidth
   );
   setupChartPointer(candles);
+  if (state.klineZoom <= KLINE_DEFAULT_ZOOM) {
+    window.requestAnimationFrame(() => {
+      if (els.chartWrap) els.chartWrap.scrollLeft = 0;
+    });
+  }
   syncBacktestRangeControls(candles);
   renderBacktest(candles, strategy);
   els.klineMeta.innerHTML = latest
@@ -1775,19 +1803,10 @@ els.klineInterval.addEventListener("change", () => {
 });
 
 normalizeKlineRange();
-els.klineStart.addEventListener("change", () => {
-  state.klineStart = els.klineStart.value;
-  normalizeKlineRange();
-  state.klineIntervalLoaded = null;
-  fetchKline(state.selectedSymbol);
-});
-
-els.klineEnd.addEventListener("change", () => {
-  state.klineEnd = els.klineEnd.value;
-  normalizeKlineRange();
-  state.klineIntervalLoaded = null;
-  fetchKline(state.selectedSymbol);
-});
+els.klineStart.addEventListener("change", applyKlineRangeInputs);
+els.klineStart.addEventListener("input", applyKlineRangeInputs);
+els.klineEnd.addEventListener("change", applyKlineRangeInputs);
+els.klineEnd.addEventListener("input", applyKlineRangeInputs);
 
 els.maPeriod.value = String(state.maPeriod);
 els.maPeriod.addEventListener("change", () => {
