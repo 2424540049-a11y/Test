@@ -35,7 +35,9 @@ const STRATEGY_SUFFIXES = {
   al_update_1: "更新1",
   al_best_1: "-1Best",
   al_volume_price: "：量价",
-  al_research_trend: "研究版"
+  al_research_trend: "研究版",
+  al_research_stable_5: "稳健5%候选",
+  al_research_defensive: "防守候选"
 };
 
 const BACKTEST_PRICE_MODE_LABELS = {
@@ -54,7 +56,7 @@ const KLINE_MIN_DATE = "2005-01-01";
 const KLINE_ZOOM_LEVELS = [0.01, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12];
 const KLINE_DEFAULT_ZOOM = 0.01;
 const KLINE_MAX_CHART_WIDTH = 90000;
-const APP_STATE_VERSION = "2026-06-23-range-controls-v3";
+const APP_STATE_VERSION = "2026-06-23-strategy-research-v1";
 
 const STRATEGY_CONFIGS = {
   al_update_1: {
@@ -90,6 +92,28 @@ const STRATEGY_CONFIGS = {
     targetVol: 0.15,
     maxExposure: 1.5,
     costRate: 0.0003
+  },
+  al_research_stable_5: {
+    type: "researchTrend",
+    fastPeriod: 10,
+    slowPeriod: 40,
+    volPeriod: 40,
+    targetVol: 0.15,
+    maxExposure: 3,
+    costRate: 0.0003,
+    trailWindow: 20,
+    trailThreshold: 0.05
+  },
+  al_research_defensive: {
+    type: "researchTrend",
+    fastPeriod: 20,
+    slowPeriod: 40,
+    volPeriod: 20,
+    targetVol: 0.1,
+    maxExposure: 1,
+    costRate: 0.0003,
+    trailWindow: 20,
+    trailThreshold: 0.02
   }
 };
 
@@ -761,11 +785,41 @@ function rollingAnnualizedVol(candles, period) {
   return values;
 }
 
+function rollingStrategyReturn(candles, rawExposure, costRate, period) {
+  const positionSeries = rawExposure.map((value, index) => (index > 0 ? rawExposure[index - 1] : 0));
+  const dailyReturns = [];
+  let previousPosition = 0;
+
+  for (let index = 0; index < candles.length; index += 1) {
+    const position = isFiniteNumber(positionSeries[index]) ? positionSeries[index] : 0;
+    if (index === 0) {
+      dailyReturns.push(0);
+      previousPosition = position;
+      continue;
+    }
+
+    const previousClose = candles[index - 1].close;
+    const priceReturn = previousClose > 0 ? candles[index].close / previousClose - 1 : 0;
+    const turnover = Math.abs(position - previousPosition);
+    dailyReturns.push(position * priceReturn - turnover * costRate);
+    previousPosition = position;
+  }
+
+  return dailyReturns.map((item, index) => {
+    if (index < period) return null;
+    let equity = 1;
+    for (let cursor = index - period + 1; cursor <= index; cursor += 1) {
+      equity *= 1 + dailyReturns[cursor];
+    }
+    return equity - 1;
+  });
+}
+
 function computeResearchTrendStrategy(candles, strategyKey, config) {
   const fast = movingAverage(candles, config.fastPeriod);
   const slow = movingAverage(candles, config.slowPeriod);
   const vol = rollingAnnualizedVol(candles, config.volPeriod);
-  const rawExposure = candles.map((item, index) => {
+  const baseExposure = candles.map((item, index) => {
     if (!isFiniteNumber(fast[index]) || !isFiniteNumber(slow[index]) || !isFiniteNumber(vol[index])) {
       return 0;
     }
@@ -775,6 +829,15 @@ function computeResearchTrendStrategy(candles, strategyKey, config) {
     const size = clamp(config.targetVol / vol[index], 0, config.maxExposure);
     return direction * size;
   });
+  const trailReturn =
+    config.trailWindow && isFiniteNumber(config.trailThreshold)
+      ? rollingStrategyReturn(candles, baseExposure, config.costRate || 0, config.trailWindow)
+      : null;
+  const rawExposure = trailReturn
+    ? baseExposure.map((value, index) =>
+        isFiniteNumber(trailReturn[index]) && trailReturn[index] > config.trailThreshold ? value : 0
+      )
+    : baseExposure;
   const positionSeries = rawExposure.map((value, index) => (index > 0 ? rawExposure[index - 1] : 0));
   const signals = [];
 
@@ -813,12 +876,16 @@ function computeResearchTrendStrategy(candles, strategyKey, config) {
     }
   }
 
+  const filterText = config.trailWindow
+    ? ` + ${config.trailWindow}日策略收益>${Math.round(config.trailThreshold * 100)}%过滤`
+    : "";
+
   return {
     key: strategyKey,
     label: strategyLabel(strategyKey, state.product),
     description: `MA${config.fastPeriod}/MA${config.slowPeriod} 趋势 + ${Math.round(
       config.targetVol * 100
-    )}%目标波动率仓位`,
+    )}%目标波动率仓位，上限${config.maxExposure}倍${filterText}`,
     lines: [
       {
         name: "fast",
@@ -836,6 +903,7 @@ function computeResearchTrendStrategy(candles, strategyKey, config) {
     signals,
     positionSeries,
     volSeries: vol,
+    trailReturnSeries: trailReturn,
     costRate: config.costRate,
     usesPositionSeries: true
   };
