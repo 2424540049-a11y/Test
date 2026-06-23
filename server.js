@@ -7,6 +7,9 @@ const { TextDecoder } = require("node:util");
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "0.0.0.0";
 const PUBLIC_DIR = path.join(__dirname, "public");
+const DATA_DIR = path.join(__dirname, "DATA");
+const LOCAL_AL_DAILY_PATH = path.join(DATA_DIR, "aluminum_AL0_daily_2005_20260622.json");
+const LOCAL_AL_DAILY_END = "2026-06-22";
 const SINA_QUOTE_ENDPOINT = "https://hq.sinajs.cn/list=";
 const SINA_KLINE_ENDPOINT =
   "https://stock2.finance.sina.com.cn/futures/api/jsonp.php";
@@ -81,6 +84,8 @@ const CONTENT_TYPES = {
   ".ico": "image/x-icon"
 };
 
+let localAlDailyCache = null;
+
 function pad2(value) {
   return String(value).padStart(2, "0");
 }
@@ -110,6 +115,13 @@ function productKeyFromSymbol(symbol) {
 
 function productConfig(productKey) {
   return PRODUCT_CONFIGS[productKey] || PRODUCT_CONFIGS[DEFAULT_PRODUCT];
+}
+
+function cacheControlForStatic(ext) {
+  if (ext === ".html" || ext === ".js" || ext === ".css" || ext === ".webmanifest") {
+    return "no-store";
+  }
+  return "public, max-age=3600";
 }
 
 function buildDefaultSymbols(productKey = DEFAULT_PRODUCT, now = new Date()) {
@@ -162,6 +174,10 @@ function cleanSymbols(input, productKey = DEFAULT_PRODUCT) {
 function symbolToSinaCode(symbol) {
   const normalized = normalizeSymbol(symbol);
   return normalized ? normalized.replace(/^nf_/, "") : "";
+}
+
+function isAlContinuousSymbol(symbol) {
+  return symbolToSinaCode(symbol).toUpperCase() === "AL0";
 }
 
 function numberOrNull(value) {
@@ -328,6 +344,63 @@ function parseKlinePayload(text, mode = "daily") {
     .sort((a, b) => chinaTimestamp(a.date) - chinaTimestamp(b.date));
 }
 
+async function loadLocalAlDailyCandles() {
+  if (localAlDailyCache) return localAlDailyCache;
+
+  const raw = await fsp.readFile(LOCAL_AL_DAILY_PATH, "utf-8");
+  const payload = JSON.parse(raw);
+  const candles = Array.isArray(payload.candles) ? payload.candles : [];
+  localAlDailyCache = candles
+    .map((row) => ({
+      date: row.date,
+      open: numberOrNull(row.open),
+      high: numberOrNull(row.high),
+      low: numberOrNull(row.low),
+      close: numberOrNull(row.close),
+      volume: numberOrNull(row.volume),
+      openInterest: numberOrNull(row.openInterest),
+      settlement: numberOrNull(row.settlement),
+      source: "local"
+    }))
+    .filter(
+      (row) =>
+        row.date &&
+        row.open !== null &&
+        row.high !== null &&
+        row.low !== null &&
+        row.close !== null
+    )
+    .sort((a, b) => chinaTimestamp(a.date) - chinaTimestamp(b.date));
+
+  return localAlDailyCache;
+}
+
+function mergeCandlesByDate(...groups) {
+  const byDate = new Map();
+  for (const candles of groups) {
+    for (const candle of candles) {
+      byDate.set(candle.date, candle);
+    }
+  }
+  return Array.from(byDate.values()).sort((a, b) => chinaTimestamp(a.date) - chinaTimestamp(b.date));
+}
+
+async function loadAlContinuousDailyCandles(symbol) {
+  const localCandles = await loadLocalAlDailyCandles();
+  let onlineTail = [];
+
+  try {
+    const text = await fetchDailyKline(symbol);
+    onlineTail = parseKlinePayload(text, "daily")
+      .filter((candle) => candle.date > LOCAL_AL_DAILY_END)
+      .map((candle) => ({ ...candle, source: "online" }));
+  } catch (error) {
+    onlineTail = [];
+  }
+
+  return mergeCandlesByDate(localCandles, onlineTail);
+}
+
 function aggregateCandles(candles, keyFor) {
   const groups = new Map();
 
@@ -420,8 +493,9 @@ async function loadKline(symbol, intervalKey) {
     return aggregateCandles(candles, (candle) => Math.floor(chinaTimestamp(candle.date) / bucketMs));
   }
 
-  const text = await fetchDailyKline(symbol);
-  const candles = parseKlinePayload(text, "daily");
+  const candles = isAlContinuousSymbol(symbol)
+    ? await loadAlContinuousDailyCandles(symbol)
+    : parseKlinePayload(await fetchDailyKline(symbol), "daily");
 
   if (config.source === "daily-aggregate" && config.period === "week") {
     return aggregateCandles(candles, (candle) => isoWeekKey(candle.date));
@@ -497,6 +571,9 @@ async function handleKline(req, res, url) {
       parseRangeTimestamp(today, "end");
     const requestedLimit = Number(url.searchParams.get("limit") || KLINE_MAX_BARS);
     const limit = clamp(Number.isFinite(requestedLimit) ? requestedLimit : KLINE_MAX_BARS, 30, KLINE_MAX_BARS);
+    const usesLocalAlDaily =
+      isAlContinuousSymbol(symbol) &&
+      (config.source === "daily" || config.source === "daily-aggregate");
 
     if (!symbol) {
       sendJson(res, 400, { error: "No valid futures symbol requested." });
@@ -516,9 +593,12 @@ async function handleKline(req, res, url) {
       intervalLabel: config.label,
       priceUnit: product.priceUnit,
       source:
-        config.source.includes("aggregate")
+        usesLocalAlDaily
+          ? "本地 DATA 沪铝历史日线 + 新浪财经增量 K 线接口"
+          : config.source.includes("aggregate")
           ? "新浪财经期货 K 线接口，服务端聚合"
           : "新浪财经期货 K 线接口",
+      localDataEnd: usesLocalAlDaily ? LOCAL_AL_DAILY_END : "",
       fetchedAt: new Date().toISOString(),
       total: candles.length,
       rangeTotal: rangedCandles.length,
@@ -555,7 +635,7 @@ async function serveStatic(req, res, url) {
     const stream = fs.createReadStream(finalPath);
     res.writeHead(200, {
       "Content-Type": CONTENT_TYPES[ext] || "application/octet-stream",
-      "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=3600"
+      "Cache-Control": cacheControlForStatic(ext)
     });
     stream.pipe(res);
   } catch (error) {

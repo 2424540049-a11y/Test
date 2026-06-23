@@ -51,9 +51,10 @@ const BACKTEST_DIRECTION_LABELS = {
 };
 
 const KLINE_MIN_DATE = "2005-01-01";
-const KLINE_ZOOM_LEVELS = [0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12];
-const KLINE_DEFAULT_ZOOM = 1;
+const KLINE_ZOOM_LEVELS = [0.01, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12];
+const KLINE_DEFAULT_ZOOM = 0.01;
 const KLINE_MAX_CHART_WIDTH = 90000;
+const APP_STATE_VERSION = "2026-06-23-local-data-v1";
 
 const STRATEGY_CONFIGS = {
   al_update_1: {
@@ -91,6 +92,13 @@ const STRATEGY_CONFIGS = {
     costRate: 0.0003
   }
 };
+
+if (localStorage.getItem("appStateVersion") !== APP_STATE_VERSION) {
+  localStorage.setItem("appStateVersion", APP_STATE_VERSION);
+  localStorage.removeItem("klineEnd");
+  localStorage.removeItem("backtestEnd");
+  localStorage.removeItem("klineZoom");
+}
 
 const savedStrategy = localStorage.getItem("strategy") || "none";
 const savedTheme = localStorage.getItem("klineTheme") || "light";
