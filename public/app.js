@@ -34,7 +34,8 @@ const STRATEGY_SUFFIXES = {
   none: "空",
   al_update_1: "更新1",
   al_best_1: "-1Best",
-  al_volume_price: "：量价"
+  al_volume_price: "：量价",
+  al_research_trend: "研究版"
 };
 
 const BACKTEST_PRICE_MODE_LABELS = {
@@ -49,7 +50,7 @@ const BACKTEST_DIRECTION_LABELS = {
   short: "单边做空"
 };
 
-const KLINE_MIN_DATE = "2020-01-01";
+const KLINE_MIN_DATE = "2005-01-01";
 const KLINE_ZOOM_LEVELS = [0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12];
 const KLINE_DEFAULT_ZOOM = 1;
 const KLINE_MAX_CHART_WIDTH = 90000;
@@ -79,6 +80,15 @@ const STRATEGY_CONFIGS = {
     sellThreshold: "mid",
     lines: ["up", "mid", "low"],
     positionLabels: true
+  },
+  al_research_trend: {
+    type: "researchTrend",
+    fastPeriod: 20,
+    slowPeriod: 60,
+    volPeriod: 20,
+    targetVol: 0.15,
+    maxExposure: 1.5,
+    costRate: 0.0003
   }
 };
 
@@ -229,6 +239,7 @@ const els = {
   klineChart: document.querySelector("#klineChart"),
   klineMeta: document.querySelector("#klineMeta"),
   backtestMeta: document.querySelector("#backtestMeta"),
+  backtestTrades: document.querySelector("#backtestTrades"),
   productSpecText: document.querySelector("#productSpecText"),
   toast: document.querySelector("#toast")
 };
@@ -719,9 +730,116 @@ function positionChangeSignals(candles) {
   return signals;
 }
 
+function rollingAnnualizedVol(candles, period) {
+  const returns = candles.map((item, index) => {
+    if (index === 0) return null;
+    const previous = candles[index - 1].close;
+    return previous > 0 ? item.close / previous - 1 : null;
+  });
+  const values = [];
+  const factor = annualizationFactor();
+
+  for (let index = 0; index < candles.length; index += 1) {
+    if (index < period) {
+      values.push(null);
+      continue;
+    }
+
+    const windowValues = returns.slice(index - period + 1, index + 1);
+    const vol = standardDeviation(windowValues);
+    values.push(isFiniteNumber(vol) ? vol * Math.sqrt(factor) : null);
+  }
+
+  return values;
+}
+
+function computeResearchTrendStrategy(candles, strategyKey, config) {
+  const fast = movingAverage(candles, config.fastPeriod);
+  const slow = movingAverage(candles, config.slowPeriod);
+  const vol = rollingAnnualizedVol(candles, config.volPeriod);
+  const rawExposure = candles.map((item, index) => {
+    if (!isFiniteNumber(fast[index]) || !isFiniteNumber(slow[index]) || !isFiniteNumber(vol[index])) {
+      return 0;
+    }
+    if (vol[index] <= 0) return 0;
+
+    const direction = fast[index] >= slow[index] ? 1 : -1;
+    const size = clamp(config.targetVol / vol[index], 0, config.maxExposure);
+    return direction * size;
+  });
+  const positionSeries = rawExposure.map((value, index) => (index > 0 ? rawExposure[index - 1] : 0));
+  const signals = [];
+
+  for (let index = 1; index < candles.length; index += 1) {
+    const previousSign = Math.sign(positionSeries[index - 1]);
+    const currentSign = Math.sign(positionSeries[index]);
+    if (previousSign === currentSign) continue;
+
+    const candle = candles[index];
+    if (currentSign > 0) {
+      signals.push(
+        strategySignal(
+          index,
+          previousSign < 0 ? "平空开多" : "开多",
+          candle.open,
+          "strategy-buy",
+          16,
+          "buy"
+        )
+      );
+    } else if (currentSign < 0) {
+      signals.push(
+        strategySignal(
+          index,
+          previousSign > 0 ? "平多开空" : "开空",
+          candle.open,
+          "strategy-sell",
+          -8,
+          "sell"
+        )
+      );
+    } else if (previousSign > 0) {
+      signals.push(strategySignal(index, "平多", candle.open, "strategy-sell", -8, "sell"));
+    } else if (previousSign < 0) {
+      signals.push(strategySignal(index, "平空", candle.open, "strategy-buy", 16, "buy"));
+    }
+  }
+
+  return {
+    key: strategyKey,
+    label: strategyLabel(strategyKey, state.product),
+    description: `MA${config.fastPeriod}/MA${config.slowPeriod} 趋势 + ${Math.round(
+      config.targetVol * 100
+    )}%目标波动率仓位`,
+    lines: [
+      {
+        name: "fast",
+        label: `MA${config.fastPeriod}`,
+        className: "strategy-line-up",
+        values: fast
+      },
+      {
+        name: "slow",
+        label: `MA${config.slowPeriod}`,
+        className: "strategy-line-mid",
+        values: slow
+      }
+    ],
+    signals,
+    positionSeries,
+    volSeries: vol,
+    costRate: config.costRate,
+    usesPositionSeries: true
+  };
+}
+
 function computeStrategy(candles, strategyKey) {
   const config = STRATEGY_CONFIGS[strategyKey];
   if (!config || !candles.length) return null;
+
+  if (config.type === "researchTrend") {
+    return computeResearchTrendStrategy(candles, strategyKey, config);
+  }
 
   const lineValues = lineValuesForStrategy(config, candles);
   const rawBuy = candles.map((item, index) => {
@@ -791,6 +909,30 @@ function formatRate(value) {
   return `${sign}${(value * 100).toFixed(2)}%`;
 }
 
+function formatExposure(value) {
+  if (!isFiniteNumber(value) || Math.abs(value) < 0.0001) return "空仓";
+  const side = value > 0 ? "多" : "空";
+  return `${side} ${(Math.abs(value) * 100).toFixed(0)}%`;
+}
+
+function standardDeviation(values) {
+  const clean = values.filter(isFiniteNumber);
+  if (!clean.length) return null;
+  const mean = clean.reduce((sum, value) => sum + value, 0) / clean.length;
+  const variance =
+    clean.reduce((sum, value) => sum + (value - mean) ** 2, 0) / clean.length;
+  return Math.sqrt(variance);
+}
+
+function annualizationFactor(interval = state.klineInterval) {
+  if (interval === "1w") return 52;
+  if (interval === "1mo") return 12;
+  if (interval === "1h") return 252 * 4;
+  if (interval === "3h") return 252 * 1.35;
+  if (interval === "5h") return 252;
+  return 252;
+}
+
 function backtestPrice(candle, signalType, mode) {
   if (mode === "average") {
     return (candle.open + candle.high + candle.low + candle.close) / 4;
@@ -848,6 +990,132 @@ function closeBacktestPosition(position, signal, candle, mode) {
   };
 }
 
+function directionFilteredPosition(position) {
+  if (state.backtestDirection === "long") return Math.max(position, 0);
+  if (state.backtestDirection === "short") return Math.min(position, 0);
+  return position;
+}
+
+function computePositionSeriesBacktest(candles, strategy, startTs, endTs) {
+  const factor = annualizationFactor();
+  const costRate = strategy.costRate || 0;
+  const dailyReturns = [];
+  const trades = [];
+  let equity = 1;
+  let peak = 1;
+  let maxDrawdown = 0;
+  let previousPosition = 0;
+  let latestPosition = 0;
+  let exposureSum = 0;
+  let activeTrade = null;
+
+  const closeActiveTrade = (candle) => {
+    if (!activeTrade) return;
+    const exitPrice = candle.open || candle.close;
+    const rawReturn =
+      activeTrade.side === "long"
+        ? (exitPrice - activeTrade.entryPrice) / activeTrade.entryPrice
+        : (activeTrade.entryPrice - exitPrice) / activeTrade.entryPrice;
+    const averageExposure =
+      activeTrade.bars > 0 ? activeTrade.exposureSum / activeTrade.bars : Math.abs(activeTrade.entryPosition);
+    trades.push({
+      side: activeTrade.side,
+      entryDate: activeTrade.entryDate,
+      exitDate: candle.date,
+      entryPrice: activeTrade.entryPrice,
+      exitPrice,
+      returnRate: rawReturn * averageExposure
+    });
+    activeTrade = null;
+  };
+
+  const openActiveTrade = (position, candle) => {
+    if (position === 0) return;
+    activeTrade = {
+      side: position > 0 ? "long" : "short",
+      entryDate: candle.date,
+      entryPrice: candle.open || candle.close,
+      entryPosition: position,
+      exposureSum: 0,
+      bars: 0
+    };
+  };
+
+  for (let index = 1; index < candles.length; index += 1) {
+    const candle = candles[index];
+    const ts = candleTimestamp(candle.date);
+    if (!Number.isFinite(ts) || (startTs !== null && ts < startTs) || (endTs !== null && ts > endTs)) {
+      continue;
+    }
+
+    const position = directionFilteredPosition(strategy.positionSeries[index] || 0);
+    const previousSign = Math.sign(previousPosition);
+    const currentSign = Math.sign(position);
+    if (previousSign !== currentSign) {
+      closeActiveTrade(candle);
+      openActiveTrade(position, candle);
+    }
+
+    const previousClose = candles[index - 1].close;
+    const priceReturn = previousClose > 0 ? candle.close / previousClose - 1 : 0;
+    const turnover = Math.abs(position - previousPosition);
+    const strategyReturn = position * priceReturn - turnover * costRate;
+
+    dailyReturns.push(strategyReturn);
+    equity *= 1 + strategyReturn;
+    peak = Math.max(peak, equity);
+    maxDrawdown = Math.min(maxDrawdown, equity / peak - 1);
+    exposureSum += Math.abs(position);
+    latestPosition = position;
+
+    if (activeTrade) {
+      activeTrade.exposureSum += Math.abs(position);
+      activeTrade.bars += 1;
+    }
+
+    previousPosition = position;
+  }
+
+  const wins = trades.filter((trade) => trade.returnRate > 0).length;
+  const averageReturn =
+    trades.length > 0
+      ? trades.reduce((sum, trade) => sum + trade.returnRate, 0) / trades.length
+      : null;
+  const bestReturn = trades.length ? Math.max(...trades.map((trade) => trade.returnRate)) : null;
+  const worstReturn = trades.length ? Math.min(...trades.map((trade) => trade.returnRate)) : null;
+  const annVol = standardDeviation(dailyReturns);
+  const annualVol = isFiniteNumber(annVol) ? annVol * Math.sqrt(factor) : null;
+  const annualReturn = dailyReturns.length ? equity ** (factor / dailyReturns.length) - 1 : null;
+
+  return {
+    status: "ok",
+    trades,
+    totalReturn: equity - 1,
+    winRate: trades.length ? wins / trades.length : null,
+    averageReturn,
+    bestReturn,
+    worstReturn,
+    annualReturn,
+    annualVol,
+    sharpe:
+      isFiniteNumber(annualReturn) && isFiniteNumber(annualVol) && annualVol > 0
+        ? annualReturn / annualVol
+        : null,
+    maxDrawdown,
+    averageExposure: dailyReturns.length ? exposureSum / dailyReturns.length : null,
+    latestPosition,
+    dailyReturnMode: true,
+    openPosition: activeTrade
+      ? {
+          side: activeTrade.side,
+          entryDate: activeTrade.entryDate,
+          entryPrice: activeTrade.entryPrice
+        }
+      : null,
+    priceModeLabel: "次根K线持仓收益"
+  };
+}
+
 function computeBacktest(candles, strategy) {
   if (!strategy) return { status: "no-strategy", trades: [] };
 
@@ -855,6 +1123,10 @@ function computeBacktest(candles, strategy) {
   const endTs = inputTimestamp(state.backtestEnd);
   if (startTs !== null && endTs !== null && startTs > endTs) {
     return { status: "invalid-range", trades: [] };
+  }
+
+  if (strategy.usesPositionSeries && Array.isArray(strategy.positionSeries)) {
+    return computePositionSeriesBacktest(candles, strategy, startTs, endTs);
   }
 
   const mode = state.backtestPriceMode;
@@ -944,9 +1216,51 @@ function formatBacktestRange() {
   return `${start} 至 ${end}`;
 }
 
+function renderBacktestTrades(result) {
+  if (!els.backtestTrades) return;
+  if (!result?.trades?.length) {
+    els.backtestTrades.innerHTML = "";
+    return;
+  }
+
+  const rows = result.trades
+    .slice(-10)
+    .reverse()
+    .map(
+      (trade) => `
+        <tr>
+          <td>${trade.side === "long" ? "多" : "空"}</td>
+          <td>${escapeHtml(trade.entryDate)}</td>
+          <td>${formatPrice(trade.entryPrice)}</td>
+          <td>${escapeHtml(trade.exitDate)}</td>
+          <td>${formatPrice(trade.exitPrice)}</td>
+          <td class="${trendClass(trade.returnRate)}">${formatRate(trade.returnRate)}</td>
+        </tr>
+      `
+    )
+    .join("");
+
+  els.backtestTrades.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>方向</th>
+          <th>开仓时间</th>
+          <th>开仓价</th>
+          <th>平仓时间</th>
+          <th>平仓价</th>
+          <th>收益</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
 function renderBacktest(candles, strategy) {
   if (!candles.length) {
     els.backtestMeta.innerHTML = "";
+    if (els.backtestTrades) els.backtestTrades.innerHTML = "";
     return;
   }
 
@@ -957,6 +1271,7 @@ function renderBacktest(candles, strategy) {
       <div><span>成交价</span><strong>${BACKTEST_PRICE_MODE_LABELS[state.backtestPriceMode]}</strong></div>
       <div><span>方向</span><strong>${BACKTEST_DIRECTION_LABELS[state.backtestDirection]}</strong></div>
     `;
+    if (els.backtestTrades) els.backtestTrades.innerHTML = "";
     return;
   }
 
@@ -964,6 +1279,7 @@ function renderBacktest(candles, strategy) {
   if (result.status === "invalid-range") {
     els.backtestMeta.innerHTML =
       "<div><span>策略回测</span><strong>开始时间不能晚于结束时间</strong></div>";
+    if (els.backtestTrades) els.backtestTrades.innerHTML = "";
     return;
   }
 
@@ -971,17 +1287,36 @@ function renderBacktest(candles, strategy) {
     ? `${result.openPosition.side === "long" ? "多单" : "空单"}未平仓`
     : "无";
   const tradeCount = result.trades.length;
+  const annualText =
+    result.annualReturn === undefined
+      ? "--"
+      : `${formatRate(result.annualReturn)} / ${
+          isFiniteNumber(result.sharpe) ? result.sharpe.toFixed(2) : "--"
+        }`;
+  const drawdownText =
+    result.maxDrawdown === undefined || !isFiniteNumber(result.maxDrawdown)
+      ? "--"
+      : formatRate(result.maxDrawdown);
+  const exposureText =
+    result.latestPosition === undefined ? "--" : formatExposure(result.latestPosition);
+  const priceModeText = result.priceModeLabel || BACKTEST_PRICE_MODE_LABELS[state.backtestPriceMode];
+  const hasReturn = tradeCount > 0 || result.dailyReturnMode;
 
   els.backtestMeta.innerHTML = `
-    <div><span>回测收益率</span><strong class="${trendClass(result.totalReturn)}">${tradeCount ? formatRate(result.totalReturn) : "--"}</strong></div>
+    <div><span>回测收益率</span><strong class="${trendClass(result.totalReturn)}">${hasReturn ? formatRate(result.totalReturn) : "--"}</strong></div>
+    <div><span>年化 / 夏普</span><strong>${annualText}</strong></div>
+    <div><span>最大回撤</span><strong class="${trendClass(result.maxDrawdown)}">${drawdownText}</strong></div>
+    <div><span>当前仓位</span><strong>${exposureText}</strong></div>
     <div><span>完成交易</span><strong>${tradeCount} 笔</strong></div>
     <div><span>胜率</span><strong>${result.winRate === null ? "--" : formatRate(result.winRate)}</strong></div>
     <div><span>平均单笔</span><strong class="${trendClass(result.averageReturn)}">${result.averageReturn === null ? "--" : formatRate(result.averageReturn)}</strong></div>
     <div><span>最佳 / 最差</span><strong>${result.bestReturn === null ? "--" : `${formatRate(result.bestReturn)} / ${formatRate(result.worstReturn)}`}</strong></div>
-    <div><span>成交价</span><strong>${BACKTEST_PRICE_MODE_LABELS[state.backtestPriceMode]}</strong></div>
+    <div><span>成交价</span><strong>${priceModeText}</strong></div>
     <div><span>方向</span><strong>${BACKTEST_DIRECTION_LABELS[state.backtestDirection]}</strong></div>
     <div><span>未平仓</span><strong>${openPositionText}</strong></div>
+    <div><span>策略说明</span><strong>${escapeHtml(strategy.description || strategy.label)}</strong></div>
   `;
+  renderBacktestTrades(result);
 }
 
 function chartWidthForCandles(candles, interval) {

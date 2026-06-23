@@ -11,7 +11,7 @@ const SINA_QUOTE_ENDPOINT = "https://hq.sinajs.cn/list=";
 const SINA_KLINE_ENDPOINT =
   "https://stock2.finance.sina.com.cn/futures/api/jsonp.php";
 const SINA_REFERER = "https://finance.sina.com.cn/";
-const KLINE_MIN_DATE = "2020-01-01";
+const KLINE_MIN_DATE = "2005-01-01";
 const KLINE_MAX_BARS = 30000;
 
 const DEFAULT_PRODUCT = "al";
